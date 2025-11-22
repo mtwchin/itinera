@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -72,4 +73,10 @@ dump.rdb
 # Alembic
 backend/alembic/versions/*.py
 !backend/alembic/versions/__init__.py
+=======
+node_modules/
+.env
+.DS_Store
+*.log
+>>>>>>> c72d659 (reset)
 
