@@ -3,16 +3,15 @@ let markers = [];
 let currentItinerary = null;
 let currentDay = 1;
 let googleMapsApiKey = '';
+let tripData = {};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-    // Get Google Maps API key from server
     try {
-        const response = await fetch('/api/config');
+        const response = await fetch('http://localhost:5000/api/config');
         const config = await response.json();
         googleMapsApiKey = config.googleMapsApiKey;
         
-        // Load Google Maps script
         const script = document.createElement('script');
         script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places`;
         script.async = true;
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('Error loading config:', error);
     }
 
-    // Form submission
     document.getElementById('itineraryForm').addEventListener('submit', handleFormSubmit);
 });
 
@@ -32,12 +30,15 @@ async function handleFormSubmit(e) {
     const formData = {
         city: document.getElementById('city').value,
         country: document.getElementById('country').value,
+        homeLocation: document.getElementById('homeLocation').value,
         lengthOfStay: parseInt(document.getElementById('lengthOfStay').value),
         groupSize: parseInt(document.getElementById('groupSize').value),
         budget: document.getElementById('budget').value,
         foodPreferences: document.getElementById('foodPreferences').value,
         mustDo: document.getElementById('mustDo').value
     };
+
+    tripData = formData;
 
     // Show loading state
     const btn = document.getElementById('generateBtn');
@@ -46,7 +47,7 @@ async function handleFormSubmit(e) {
     btn.querySelector('.btn-loader').style.display = 'inline-flex';
 
     try {
-        const response = await fetch('/api/generate-itinerary', {
+        const response = await fetch('http://localhost:5000/api/generate-itinerary', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(formData)
@@ -64,7 +65,6 @@ async function handleFormSubmit(e) {
         console.error('Error:', error);
         alert('Failed to generate itinerary. Please check your API keys and try again.');
     } finally {
-        // Reset button
         btn.disabled = false;
         btn.querySelector('.btn-text').style.display = 'inline';
         btn.querySelector('.btn-loader').style.display = 'none';
@@ -76,16 +76,21 @@ function displayItinerary(data, formData) {
     document.getElementById('formSection').style.display = 'none';
     document.getElementById('resultsSection').style.display = 'block';
 
-    // Create day selector
-    const daySelector = document.getElementById('daySelector');
-    daySelector.innerHTML = '';
+    // Update header
+    document.getElementById('tripTitle').textContent = `${formData.city}, ${formData.country}`;
+    document.getElementById('tripSubtitle').textContent = 
+        `${formData.lengthOfStay} days • ${formData.groupSize} traveler${formData.groupSize > 1 ? 's' : ''} • From ${formData.homeLocation}`;
+
+    // Create day tabs
+    const dayTabs = document.getElementById('dayTabs');
+    dayTabs.innerHTML = '';
     
     data.itinerary.forEach((day, index) => {
-        const btn = document.createElement('button');
-        btn.className = `day-btn ${index === 0 ? 'active' : ''}`;
-        btn.textContent = `Day ${day.day}`;
-        btn.onclick = () => selectDay(day.day);
-        daySelector.appendChild(btn);
+        const tab = document.createElement('button');
+        tab.className = `day-tab ${index === 0 ? 'active' : ''}`;
+        tab.textContent = `Day ${day.day}`;
+        tab.onclick = () => selectDay(day.day);
+        dayTabs.appendChild(tab);
     });
 
     // Display itinerary content
@@ -100,7 +105,7 @@ function displayItinerary(data, formData) {
         let activitiesHtml = '';
         day.activities.forEach(activity => {
             activitiesHtml += `
-                <div class="activity-card" data-lat="${activity.coordinates.lat}" data-lng="${activity.coordinates.lng}">
+                <div class="activity-card">
                     <div class="activity-header">
                         <span class="activity-time">${activity.time}</span>
                         <span class="activity-type">${activity.type}</span>
@@ -114,7 +119,7 @@ function displayItinerary(data, formData) {
         });
 
         dayDiv.innerHTML = `
-            <h3 class="day-theme">🎯 ${day.theme}</h3>
+            <h2 class="day-theme">${day.theme}</h2>
             ${activitiesHtml}
         `;
         
@@ -123,21 +128,24 @@ function displayItinerary(data, formData) {
 
     // Display tips
     if (data.tips && data.tips.length > 0) {
-        const tipsSection = document.getElementById('tipsSection');
-        tipsSection.style.display = 'block';
+        const tipsCard = document.getElementById('tipsCard');
+        tipsCard.style.display = 'block';
         const tipsList = document.getElementById('tipsList');
         tipsList.innerHTML = data.tips.map(tip => `<li>${tip}</li>`).join('');
     }
 
-    // Display budget
-    if (data.estimatedBudget) {
-        const budgetDiv = document.createElement('div');
-        budgetDiv.className = 'budget-estimate';
-        budgetDiv.innerHTML = `
-            <h3>💰 Estimated Budget</h3>
-            <p>${data.estimatedBudget}</p>
-        `;
-        itineraryContent.appendChild(budgetDiv);
+    // Display budget and travel info
+    if (data.estimatedBudget || data.travelInfo) {
+        const budgetInfo = document.getElementById('budgetInfo');
+        let html = '';
+        if (data.estimatedBudget) {
+            html += `<p><strong>Budget:</strong> ${data.estimatedBudget}</p>`;
+        }
+        if (data.travelInfo) {
+            html += `<p><strong>From Home:</strong> ${data.travelInfo.fromHome}</p>`;
+            html += `<p><strong>Return:</strong> ${data.travelInfo.toHome}</p>`;
+        }
+        budgetInfo.innerHTML = html;
     }
 
     // Initialize map
@@ -148,11 +156,11 @@ function displayItinerary(data, formData) {
 function selectDay(day) {
     currentDay = day;
     
-    // Update button states
-    document.querySelectorAll('.day-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.textContent === `Day ${day}`) {
-            btn.classList.add('active');
+    // Update tab states
+    document.querySelectorAll('.day-tab').forEach(tab => {
+        tab.classList.remove('active');
+        if (tab.textContent === `Day ${day}`) {
+            tab.classList.add('active');
         }
     });
 
@@ -167,7 +175,6 @@ function selectDay(day) {
 }
 
 function initializeMap(data, formData) {
-    // Get first day's first activity for center
     const firstActivity = data.itinerary[0].activities[0];
     const center = firstActivity.coordinates;
 
@@ -176,31 +183,18 @@ function initializeMap(data, formData) {
         center: center,
         styles: [
             {
-                "elementType": "geometry",
-                "stylers": [{ "color": "#1e293b" }]
-            },
-            {
-                "elementType": "labels.text.fill",
-                "stylers": [{ "color": "#8b9db8" }]
-            },
-            {
-                "elementType": "labels.text.stroke",
-                "stylers": [{ "color": "#0f172a" }]
-            },
-            {
-                "featureType": "road",
-                "elementType": "geometry",
-                "stylers": [{ "color": "#334155" }]
-            },
-            {
-                "featureType": "water",
-                "elementType": "geometry",
-                "stylers": [{ "color": "#0f172a" }]
+                featureType: "poi",
+                elementType: "labels",
+                stylers: [{ visibility: "off" }]
             }
-        ]
+        ],
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true
     });
 
-    // Geocode and add markers for all activities
     geocodeActivities(data);
 }
 
@@ -215,7 +209,6 @@ async function geocodeActivities(data) {
                         if (status === 'OK') {
                             resolve(results[0].geometry.location);
                         } else {
-                            // Use city center as fallback
                             const dayItinerary = data.itinerary.find(d => d.day === dayData.day);
                             resolve(new google.maps.LatLng(
                                 dayItinerary.activities[0].coordinates.lat,
@@ -235,12 +228,10 @@ async function geocodeActivities(data) {
         }
     }
 
-    // Update map for current day
     updateMapForDay(currentDay);
 }
 
 function updateMapForDay(day) {
-    // Clear existing markers
     markers.forEach(marker => marker.setMap(null));
     markers = [];
 
@@ -262,7 +253,7 @@ function updateMapForDay(day) {
             label: {
                 text: (index + 1).toString(),
                 color: 'white',
-                fontSize: '14px',
+                fontSize: '12px',
                 fontWeight: 'bold'
             },
             animation: google.maps.Animation.DROP
@@ -270,10 +261,10 @@ function updateMapForDay(day) {
 
         const infoWindow = new google.maps.InfoWindow({
             content: `
-                <div style="color: #0f172a; padding: 10px; max-width: 200px;">
-                    <h3 style="margin: 0 0 5px 0; font-size: 16px;">${activity.name}</h3>
-                    <p style="margin: 0; font-size: 12px;">${activity.time} - ${activity.duration}</p>
-                    <p style="margin: 5px 0 0 0; font-size: 13px;">${activity.description}</p>
+                <div style="padding: 12px; max-width: 200px;">
+                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">${activity.name}</h3>
+                    <p style="margin: 0 0 4px 0; font-size: 12px; color: #666;">${activity.time} • ${activity.duration}</p>
+                    <p style="margin: 0; font-size: 13px; color: #333;">${activity.description}</p>
                 </div>
             `
         });
@@ -286,7 +277,6 @@ function updateMapForDay(day) {
         bounds.extend(position);
     });
 
-    // Fit map to markers
     if (markers.length > 0) {
         map.fitBounds(bounds);
     }
@@ -296,7 +286,6 @@ function exportToGoogleMaps() {
     const dayData = currentItinerary.itinerary.find(d => d.day === currentDay);
     if (!dayData) return;
 
-    // Create Google Maps URL with waypoints
     const baseUrl = 'https://www.google.com/maps/dir/';
     const waypoints = dayData.activities.map(activity => 
         `${activity.coordinates.lat},${activity.coordinates.lng}`
@@ -314,7 +303,7 @@ async function refineItinerary() {
     }
 
     try {
-        const response = await fetch('/api/refine-itinerary', {
+        const response = await fetch('http://localhost:5000/api/refine-itinerary', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -327,7 +316,7 @@ async function refineItinerary() {
         
         if (result.success) {
             currentItinerary = result.data;
-            displayItinerary(result.data, {});
+            displayItinerary(result.data, tripData);
             document.getElementById('refineFeedback').value = '';
         } else {
             alert('Error refining itinerary: ' + result.error);
@@ -341,8 +330,7 @@ async function refineItinerary() {
 function resetForm() {
     document.getElementById('formSection').style.display = 'block';
     document.getElementById('resultsSection').style.display = 'none';
-    document.getElementById('itineraryForm').reset();
     currentItinerary = null;
     currentDay = 1;
+    tripData = {};
 }
-

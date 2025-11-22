@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -8,75 +7,20 @@ __pycache__/
 venv/
 env/
 ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-backend/venv/
-backend/env/
 
 # Environment variables
 .env
-.env.local
-.env.*.local
-backend/.env
-frontend/.env
 
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# Database
-*.db
-*.sqlite3
-
-# Testing
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-frontend/node_modules/
-frontend/build/
-frontend/.pnp
-frontend/.pnp.js
-
-# Misc
 .DS_Store
+
+# Logs
 *.log
-.cache/
 
-# Redis
-dump.rdb
-
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/__init__.py
-=======
+# Node (in case of future use)
 node_modules/
-.env
-.DS_Store
-*.log
->>>>>>> c72d659 (reset)
-

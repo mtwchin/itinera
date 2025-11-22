@@ -1,0 +1,394 @@
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+import openai
+import googlemaps
+import requests
+import json
+from datetime import datetime
+import random
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__, static_folder='public')
+CORS(app)
+
+# Initialize API clients
+openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+gmaps = googlemaps.Client(key=os.getenv('GOOGLE_MAPS_API_KEY'))
+TIKTOK_API_KEY = os.getenv('TIKTOK_API_KEY')
+
+# TikTok API Configuration
+TIKTOK_API_URL = "https://open.tiktokapis.com/v2/"
+
+
+def scrape_tiktok_places(city, country, num_results=10):
+    """
+    Scrape trending places from TikTok based on city and country.
+    Uses TikTok Research API or Content API.
+    """
+    try:
+        # TikTok Research API endpoint
+        search_query = f"{city} {country} travel food things to do"
+        
+        headers = {
+            "Authorization": f"Bearer {TIKTOK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Using TikTok Research API (you'll need Research API access)
+        payload = {
+            "query": {
+                "and": [
+                    {
+                        "field_name": "hashtag_name",
+                        "field_values": [city.lower(), "travel", "thingstodo"],
+                        "operation": "IN"
+                    }
+                ],
+                "not": []
+            },
+            "max_count": num_results,
+            "start_date": "20240101",
+            "end_date": datetime.now().strftime("%Y%m%d")
+        }
+        
+        response = requests.post(
+            f"{TIKTOK_API_URL}research/video/query/",
+            headers=headers,
+            json=payload,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            places = parse_tiktok_response(data, city, country)
+            return places
+        else:
+            print(f"TikTok API Error: {response.status_code}")
+            return simulate_tiktok_data(city, country)
+            
+    except Exception as e:
+        print(f"Error scraping TikTok: {e}")
+        # Fallback to simulated data
+        return simulate_tiktok_data(city, country)
+
+
+def parse_tiktok_response(data, city, country):
+    """Parse TikTok API response and extract place information."""
+    places = []
+    
+    if 'data' in data and 'videos' in data['data']:
+        for video in data['data']['videos'][:10]:
+            # Extract place names from video descriptions and hashtags
+            description = video.get('video_description', '')
+            hashtags = video.get('hashtags', [])
+            
+            # Simple extraction logic (would need more sophisticated NLP)
+            place_name = extract_place_from_text(description)
+            
+            places.append({
+                'name': place_name,
+                'type': categorize_place(description, hashtags),
+                'city': city,
+                'country': country,
+                'description': description[:200],
+                'tiktok_url': f"https://www.tiktok.com/@{video.get('username', '')}/video/{video.get('id', '')}",
+                'views': video.get('view_count', 0),
+                'engagement': video.get('like_count', 0) + video.get('share_count', 0)
+            })
+    
+    return places if places else simulate_tiktok_data(city, country)
+
+
+def extract_place_from_text(text):
+    """Extract place name from text (simplified)."""
+    # In production, use NLP/NER for better extraction
+    words = text.split()
+    # Look for capitalized sequences
+    for i, word in enumerate(words):
+        if word and word[0].isupper() and i < len(words) - 1:
+            next_word = words[i + 1]
+            if next_word and next_word[0].isupper():
+                return f"{word} {next_word}"
+    return "Popular Spot"
+
+
+def categorize_place(description, hashtags):
+    """Categorize place based on description and hashtags."""
+    text = (description + " " + " ".join(hashtags)).lower()
+    
+    if any(word in text for word in ['food', 'restaurant', 'cafe', 'eat', 'dining']):
+        return 'food'
+    elif any(word in text for word in ['museum', 'art', 'gallery', 'temple', 'church']):
+        return 'culture'
+    elif any(word in text for word in ['beach', 'park', 'mountain', 'nature', 'hiking']):
+        return 'nature'
+    elif any(word in text for word in ['shop', 'market', 'mall', 'boutique']):
+        return 'shopping'
+    else:
+        return 'landmark'
+
+
+def simulate_tiktok_data(city, country):
+    """Simulated TikTok data for testing or fallback."""
+    place_templates = [
+        {'name': f'{city} Historic Downtown', 'type': 'landmark'},
+        {'name': f'{city} Food Market', 'type': 'food'},
+        {'name': f'{city} Scenic Viewpoint', 'type': 'nature'},
+        {'name': f'{city} Art Museum', 'type': 'culture'},
+        {'name': f'{city} Waterfront', 'type': 'nature'},
+        {'name': 'Traditional Local Restaurant', 'type': 'food'},
+        {'name': f'{city} Shopping District', 'type': 'shopping'},
+        {'name': 'Historic Temple', 'type': 'culture'},
+        {'name': f'{city} Night Market', 'type': 'food'},
+        {'name': f'{city} Central Park', 'type': 'nature'}
+    ]
+    
+    return [
+        {
+            **place,
+            'city': city,
+            'country': country,
+            'description': f"Popular spot in {city}, {country} trending on TikTok",
+            'views': random.randint(10000, 5000000),
+            'engagement': random.randint(1000, 500000)
+        }
+        for place in place_templates
+    ]
+
+
+@app.route('/')
+def index():
+    return send_from_directory('public', 'index.html')
+
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('public', path)
+
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Return configuration for frontend."""
+    return jsonify({
+        'googleMapsApiKey': os.getenv('GOOGLE_MAPS_API_KEY')
+    })
+
+
+@app.route('/api/generate-itinerary', methods=['POST'])
+def generate_itinerary():
+    """Generate AI-powered itinerary based on TikTok trends."""
+    try:
+        data = request.json
+        city = data.get('city')
+        country = data.get('country')
+        home_location = data.get('homeLocation')
+        length_of_stay = data.get('lengthOfStay')
+        group_size = data.get('groupSize')
+        food_preferences = data.get('foodPreferences', 'None specified')
+        must_do = data.get('mustDo', 'None specified')
+        budget = data.get('budget', 'Medium')
+
+        # Step 1: Get trending places from TikTok
+        print(f"Fetching TikTok trends for {city}, {country}...")
+        trending_places = scrape_tiktok_places(city, country)
+        
+        # Step 2: Get coordinates for places using Google Maps
+        for place in trending_places:
+            try:
+                geocode_result = gmaps.geocode(f"{place['name']}, {city}, {country}")
+                if geocode_result:
+                    location = geocode_result[0]['geometry']['location']
+                    place['coordinates'] = {
+                        'lat': location['lat'],
+                        'lng': location['lng']
+                    }
+                    place['address'] = geocode_result[0]['formatted_address']
+            except Exception as e:
+                print(f"Geocoding error for {place['name']}: {e}")
+                place['coordinates'] = {'lat': 0, 'lng': 0}
+                place['address'] = f"{city}, {country}"
+
+        # Step 3: Use ChatGPT to create intelligent itinerary
+        places_list = "\n".join([
+            f"{i+1}. {p['name']} ({p['type']}) - {p.get('views', 0):,} TikTok views"
+            for i, p in enumerate(trending_places)
+        ])
+
+        prompt = f"""You are a travel expert creating an itinerary based on trending TikTok locations.
+
+Destination: {city}, {country}
+Home location: {home_location}
+Duration: {length_of_stay} days
+Group size: {group_size} people
+Food preferences: {food_preferences}
+Must-do activities: {must_do}
+Budget: {budget}
+
+Trending places from TikTok (sorted by popularity):
+{places_list}
+
+Create a {length_of_stay}-day itinerary that:
+1. Considers travel from {home_location} (include arrival/departure considerations)
+2. Groups nearby attractions for each day (use geographic clustering - K-means logic)
+3. Balances different types of activities (culture, food, nature, shopping)
+4. On Day 1: Account for arrival time from {home_location}, start with easier activities
+5. On Day {length_of_stay}: End early enough for travel back to {home_location}
+6. Provides realistic timing (morning, afternoon, evening)
+7. Includes the must-do activities if specified
+8. Includes food recommendations based on preferences
+9. Prioritizes places with higher TikTok engagement
+
+Format your response as a JSON object with this structure:
+{{
+  "itinerary": [
+    {{
+      "day": 1,
+      "theme": "Day theme",
+      "activities": [
+        {{
+          "time": "9:00 AM",
+          "name": "Activity name",
+          "type": "landmark/food/culture/nature/shopping",
+          "duration": "2 hours",
+          "description": "Why visit and what to expect",
+          "address": "Full address",
+          "coordinates": {{"lat": 0, "lng": 0}}
+        }}
+      ]
+    }}
+  ],
+  "tips": [
+    "Travel tip considering journey from {home_location}",
+    "Tip 2",
+    "Tip 3"
+  ],
+  "travelInfo": {{
+    "fromHome": "Suggested departure time/transportation from {home_location}",
+    "toHome": "Suggested return time/transportation to {home_location}"
+  }},
+  "estimatedBudget": "Budget estimate per person for entire trip (including travel from {home_location})"
+}}
+
+IMPORTANT: Return ONLY the JSON object, no other text."""
+
+        # Call OpenAI API (using gpt-4o-mini for cost efficiency)
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel planning assistant that creates detailed, geographically optimized itineraries. Always respond with valid JSON only."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.8
+        )
+
+        itinerary_data = json.loads(response.choices[0].message.content)
+
+        return jsonify({
+            'success': True,
+            'data': itinerary_data,
+            'trendingPlaces': trending_places
+        })
+
+    except Exception as e:
+        print(f"Error generating itinerary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/refine-itinerary', methods=['POST'])
+def refine_itinerary():
+    """Refine existing itinerary based on user feedback."""
+    try:
+        data = request.json
+        current_itinerary = data.get('currentItinerary')
+        user_feedback = data.get('userFeedback')
+
+        prompt = f"""The user has the following itinerary and wants to make changes:
+
+Current Itinerary:
+{json.dumps(current_itinerary, indent=2)}
+
+User Feedback/Changes:
+{user_feedback}
+
+Please provide an updated itinerary incorporating their feedback. Maintain the same JSON structure.
+Return ONLY the JSON object, no other text."""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel planning assistant. Always respond with valid JSON only."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7
+        )
+
+        refined_itinerary = json.loads(response.choices[0].message.content)
+
+        return jsonify({
+            'success': True,
+            'data': refined_itinerary
+        })
+
+    except Exception as e:
+        print(f"Error refining itinerary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/search-places', methods=['POST'])
+def search_places():
+    """Search for places using Google Maps Places API."""
+    try:
+        data = request.json
+        query = data.get('query')
+        location = data.get('location')  # lat, lng
+
+        places_result = gmaps.places(
+            query=query,
+            location=location
+        )
+
+        return jsonify({
+            'success': True,
+            'places': places_result.get('results', [])
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+if __name__ == '__main__':
+    print("🚀 Starting Itinera server...")
+    print("📍 Make sure your API keys are set in .env file")
+    print("   - OPENAI_API_KEY")
+    print("   - GOOGLE_MAPS_API_KEY")
+    print("   - TIKTOK_API_KEY (optional, will use simulated data if not available)")
+    print()
+    app.run(host='0.0.0.0', port=5000, debug=True)
+

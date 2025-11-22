@@ -3,117 +3,139 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Itinera - AI-Powered Travel Planner</title>
+    <title>Itinera - AI Travel Planner</title>
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🌍 Itinera</h1>
-            <p class="subtitle">AI-powered itineraries from TikTok trends</p>
-        </header>
-
-        <div class="main-content">
-            <!-- Input Form -->
-            <div class="form-section" id="formSection">
-                <h2>Plan Your Trip</h2>
-                <form id="itineraryForm">
-                    <div class="form-group">
-                        <label for="city">City *</label>
-                        <input type="text" id="city" name="city" placeholder="e.g., Tokyo" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="country">Country *</label>
-                        <input type="text" id="country" name="country" placeholder="e.g., Japan" required>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="lengthOfStay">Length of Stay (days) *</label>
-                            <input type="number" id="lengthOfStay" name="lengthOfStay" min="1" max="30" value="3" required>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="groupSize">Group Size *</label>
-                            <input type="number" id="groupSize" name="groupSize" min="1" max="50" value="2" required>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="budget">Budget</label>
-                        <select id="budget" name="budget">
-                            <option value="Budget">Budget ($)</option>
-                            <option value="Medium" selected>Medium ($$)</option>
-                            <option value="Luxury">Luxury ($$$)</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="foodPreferences">Food Preferences</label>
-                        <input type="text" id="foodPreferences" name="foodPreferences" 
-                               placeholder="e.g., Vegetarian, Seafood, Local cuisine">
-                    </div>
-
-                    <div class="form-group">
-                        <label for="mustDo">Must-Do Activities</label>
-                        <textarea id="mustDo" name="mustDo" rows="3" 
-                                  placeholder="Any specific places or activities you want to include..."></textarea>
-                    </div>
-
-                    <button type="submit" class="btn-primary" id="generateBtn">
-                        <span class="btn-text">Generate Itinerary</span>
-                        <span class="btn-loader" style="display: none;">
-                            <span class="spinner"></span> Generating...
-                        </span>
-                    </button>
-                </form>
+        <!-- Input Section -->
+        <div class="form-section" id="formSection">
+            <div class="logo">
+                <h1>Itinera</h1>
+                <p>AI-powered travel planning from TikTok trends</p>
             </div>
 
-            <!-- Results Section -->
-            <div class="results-section" id="resultsSection" style="display: none;">
-                <div class="results-header">
-                    <h2>Your Personalized Itinerary</h2>
-                    <button class="btn-secondary" onclick="resetForm()">New Search</button>
+            <form id="itineraryForm">
+                <!-- Essential Info -->
+                <div class="form-section-group">
+                    <h2>Where are you going?</h2>
+                    
+                    <div class="input-group">
+                        <input type="text" id="city" name="city" placeholder="City" required>
+                        <input type="text" id="country" name="country" placeholder="Country" required>
+                    </div>
+
+                    <input type="text" id="homeLocation" name="homeLocation" 
+                           placeholder="Home location (e.g., San Francisco, USA)" required>
                 </div>
 
-                <!-- Day Selector -->
-                <div class="day-selector" id="daySelector"></div>
+                <!-- Trip Details -->
+                <div class="form-section-group">
+                    <h2>Trip details</h2>
+                    
+                    <div class="input-row">
+                        <div class="input-field">
+                            <label>Days</label>
+                            <input type="number" id="lengthOfStay" name="lengthOfStay" 
+                                   min="1" max="30" value="3" required>
+                        </div>
+                        <div class="input-field">
+                            <label>Travelers</label>
+                            <input type="number" id="groupSize" name="groupSize" 
+                                   min="1" max="50" value="2" required>
+                        </div>
+                        <div class="input-field">
+                            <label>Budget</label>
+                            <select id="budget" name="budget">
+                                <option value="Budget">$</option>
+                                <option value="Medium" selected>$$</option>
+                                <option value="Luxury">$$$</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
 
-                <div class="content-grid">
-                    <!-- Itinerary Details -->
-                    <div class="itinerary-panel">
-                        <div id="itineraryContent"></div>
+                <!-- Preferences (Collapsible) -->
+                <details class="preferences-section">
+                    <summary>Preferences (optional)</summary>
+                    <div class="preferences-content">
+                        <input type="text" id="foodPreferences" name="foodPreferences" 
+                               placeholder="Food preferences (e.g., vegetarian, seafood)">
                         
-                        <div class="tips-section" id="tipsSection" style="display: none;">
-                            <h3>💡 Travel Tips</h3>
-                            <ul id="tipsList"></ul>
-                        </div>
-
-                        <div class="refine-section">
-                            <h3>Want to make changes?</h3>
-                            <textarea id="refineFeedback" placeholder="Tell us what you'd like to change..."></textarea>
-                            <button class="btn-secondary" onclick="refineItinerary()">Refine Itinerary</button>
-                        </div>
+                        <textarea id="mustDo" name="mustDo" rows="2" 
+                                  placeholder="Must-do activities or places..."></textarea>
                     </div>
+                </details>
 
-                    <!-- Map Panel -->
-                    <div class="map-panel">
-                        <div id="map"></div>
-                        <div class="map-controls">
-                            <button class="btn-secondary" onclick="exportToGoogleMaps()">
-                                📍 Export to Google Maps
-                            </button>
-                        </div>
+                <button type="submit" class="btn-primary" id="generateBtn">
+                    <span class="btn-text">Generate Itinerary</span>
+                    <span class="btn-loader" style="display: none;">
+                        <span class="spinner"></span>
+                    </span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection" style="display: none;">
+            <div class="results-header">
+                <div class="header-left">
+                    <h1 id="tripTitle"></h1>
+                    <p id="tripSubtitle"></p>
+                </div>
+                <button class="btn-reset" onclick="resetForm()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                        <path d="M3 3v5h5"></path>
+                    </svg>
+                    New Trip
+                </button>
+            </div>
+
+            <!-- Day Tabs -->
+            <div class="day-tabs" id="dayTabs"></div>
+
+            <!-- Content Grid -->
+            <div class="content-layout">
+                <!-- Itinerary Panel -->
+                <div class="itinerary-panel">
+                    <div id="itineraryContent"></div>
+                </div>
+
+                <!-- Map Panel -->
+                <div class="map-panel">
+                    <div id="map"></div>
+                    <div class="map-actions">
+                        <button class="btn-secondary" onclick="exportToGoogleMaps()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                                <circle cx="12" cy="10" r="3"></circle>
+                            </svg>
+                            Open in Google Maps
+                        </button>
                     </div>
+                </div>
+            </div>
+
+            <!-- Tips & Refinement -->
+            <div class="bottom-section">
+                <div class="tips-card" id="tipsCard" style="display: none;">
+                    <h3>💡 Tips</h3>
+                    <ul id="tipsList"></ul>
+                    <div class="budget-info" id="budgetInfo"></div>
+                </div>
+
+                <div class="refine-card">
+                    <h3>Make changes</h3>
+                    <textarea id="refineFeedback" 
+                              placeholder="e.g., Add more food stops, less walking, swap day 2 and 3..."></textarea>
+                    <button class="btn-secondary" onclick="refineItinerary()">Update Itinerary</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script src="script.js"></script>
-    <script async defer></script>
 </body>
 </html>
-
