@@ -178,6 +178,57 @@ def get_config():
     })
 
 
+@app.route('/api/expand-maps-url', methods=['POST'])
+def expand_maps_url():
+    """Expand shortened Google Maps URLs and extract coordinates."""
+    try:
+        data = request.json
+        short_url = data.get('url')
+        
+        if not short_url:
+            return jsonify({'success': False, 'error': 'No URL provided'}), 400
+        
+        # Follow redirects to get full URL
+        response = requests.get(short_url, allow_redirects=True, timeout=10)
+        full_url = response.url
+        
+        print(f"Expanded URL: {full_url}")
+        
+        # Parse coordinates from expanded URL
+        import re
+        
+        # Try different patterns
+        patterns = [
+            r'@(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'/place/[^\/]+/@(-?\d+\.\d+),(-?\d+\.\d+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, full_url)
+            if match:
+                lat = float(match.group(1))
+                lng = float(match.group(2))
+                return jsonify({
+                    'success': True,
+                    'coordinates': {'lat': lat, 'lng': lng},
+                    'fullUrl': full_url
+                })
+        
+        return jsonify({
+            'success': False,
+            'error': 'Could not extract coordinates from URL'
+        }), 400
+        
+    except Exception as e:
+        print(f"Error expanding URL: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/generate-itinerary', methods=['POST'])
 def generate_itinerary():
     """Generate AI-powered itinerary based on TikTok trends."""
@@ -185,7 +236,12 @@ def generate_itinerary():
         data = request.json
         city = data.get('city')
         country = data.get('country')
-        home_location = data.get('homeLocation')
+        accommodation = data.get('accommodation', {})
+        accommodation_address = accommodation.get('address', 'City center')
+        accommodation_coords = {
+            'lat': accommodation.get('lat', 0),
+            'lng': accommodation.get('lng', 0)
+        }
         length_of_stay = data.get('lengthOfStay')
         group_size = data.get('groupSize')
         food_preferences = data.get('foodPreferences', 'None specified')
@@ -221,7 +277,7 @@ def generate_itinerary():
         prompt = f"""You are a travel expert creating an itinerary based on trending TikTok locations.
 
 Destination: {city}, {country}
-Home location: {home_location}
+Accommodation: {accommodation_address} (coordinates: {accommodation_coords['lat']}, {accommodation_coords['lng']})
 Duration: {length_of_stay} days
 Group size: {group_size} people
 Food preferences: {food_preferences}
@@ -231,16 +287,20 @@ Budget: {budget}
 Trending places from TikTok (sorted by popularity):
 {places_list}
 
+IMPORTANT: The traveler is staying at {accommodation_address}. Use this as the starting and ending point for EACH day.
+
 Create a {length_of_stay}-day itinerary that:
-1. Considers travel from {home_location} (include arrival/departure considerations)
-2. Groups nearby attractions for each day (use geographic clustering - K-means logic)
-3. Balances different types of activities (culture, food, nature, shopping)
-4. On Day 1: Account for arrival time from {home_location}, start with easier activities
-5. On Day {length_of_stay}: End early enough for travel back to {home_location}
-6. Provides realistic timing (morning, afternoon, evening)
-7. Includes the must-do activities if specified
-8. Includes food recommendations based on preferences
-9. Prioritizes places with higher TikTok engagement
+1. STARTS each day from the accommodation location: {accommodation_address}
+2. ENDS each day returning to the accommodation location
+3. Groups nearby attractions efficiently to minimize travel time from accommodation
+4. Uses geographic clustering (K-means) but considers accommodation as the daily base point
+5. Plans routes in logical loops/circuits that return to accommodation
+6. Balances different types of activities (culture, food, nature, shopping)
+7. Provides realistic timing including travel time to/from accommodation
+8. Includes the must-do activities if specified
+9. Includes food recommendations based on preferences
+10. Prioritizes places with higher TikTok engagement
+11. Suggests best times to leave accommodation and expected return times
 
 Format your response as a JSON object with this structure:
 {{
@@ -262,15 +322,16 @@ Format your response as a JSON object with this structure:
     }}
   ],
   "tips": [
-    "Travel tip considering journey from {home_location}",
-    "Tip 2",
-    "Tip 3"
+    "Tip about efficient routes from accommodation",
+    "Local transportation tip",
+    "Safety or cultural tip"
   ],
-  "travelInfo": {{
-    "fromHome": "Suggested departure time/transportation from {home_location}",
-    "toHome": "Suggested return time/transportation to {home_location}"
+  "accommodationInfo": {{
+    "morningStart": "Suggested time to leave accommodation each morning",
+    "eveningReturn": "Expected return time to accommodation each evening",
+    "transportationTips": "Best way to get around from this location"
   }},
-  "estimatedBudget": "Budget estimate per person for entire trip (including travel from {home_location})"
+  "estimatedBudget": "Budget estimate per person for entire trip"
 }}
 
 IMPORTANT: Return ONLY the JSON object, no other text."""
