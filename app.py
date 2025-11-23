@@ -244,6 +244,7 @@ def generate_itinerary():
         }
         length_of_stay = data.get('lengthOfStay')
         group_size = data.get('groupSize')
+        wake_up_time = data.get('wakeUpTime', '08:00')
         food_preferences = data.get('foodPreferences', 'None specified')
         must_do = data.get('mustDo', 'None specified')
         budget = data.get('budget', 'Medium')
@@ -280,6 +281,7 @@ Destination: {city}, {country}
 Accommodation: {accommodation_address} (coordinates: {accommodation_coords['lat']}, {accommodation_coords['lng']})
 Duration: {length_of_stay} days
 Group size: {group_size} people
+Wake up time: {wake_up_time} (start activities accordingly)
 Food preferences: {food_preferences}
 Must-do activities: {must_do}
 Budget: {budget}
@@ -290,17 +292,17 @@ Trending places from TikTok (sorted by popularity):
 IMPORTANT: The traveler is staying at {accommodation_address}. Use this as the starting and ending point for EACH day.
 
 Create a {length_of_stay}-day itinerary that:
-1. STARTS each day from the accommodation location: {accommodation_address}
+1. STARTS each day from the accommodation location: {accommodation_address} around {wake_up_time}
 2. ENDS each day returning to the accommodation location
 3. Groups nearby attractions efficiently to minimize travel time from accommodation
 4. Uses geographic clustering (K-means) but considers accommodation as the daily base point
 5. Plans routes in logical loops/circuits that return to accommodation
 6. Balances different types of activities (culture, food, nature, shopping)
-7. Provides realistic timing including travel time to/from accommodation
+7. Provides realistic timing including travel time to/from accommodation and wake up time
 8. Includes the must-do activities if specified
 9. Includes food recommendations based on preferences
 10. Prioritizes places with higher TikTok engagement
-11. Suggests best times to leave accommodation and expected return times
+11. Suggests best times to leave accommodation and expected return times based on {wake_up_time} wake up time
 
 Format your response as a JSON object with this structure:
 {{

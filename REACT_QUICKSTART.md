@@ -13,6 +13,15 @@
 - ✅ Setup scripts created
 - ✅ Component architecture designed
 
+### 3. Latest UI/UX Improvements
+- ✅ Removed emojis/emoticons for cleaner interface
+- ✅ Added wake up time preference
+- ✅ Google Places autocomplete for city search
+- ✅ Map selector modal for destination (UI ready)
+- ✅ Auto-set departure date to same month as arrival
+- ✅ Google Maps export function with route lines
+- ✅ Improved form layout with preferences grid
+
 ---
 
 ## 🚀 Get Started Now
@@ -116,12 +125,19 @@ From [awesome-react-components](https://github.com/brillout/awesome-react-compon
 
 ### Step 2: Configure API Keys
 
-Edit `.env`:
+Edit `.env` (root directory):
 ```env
 OPENAI_API_KEY=your_key_here
 GOOGLE_MAPS_API_KEY=your_key_here
 TIKTOK_MS_TOKEN=optional_but_recommended
 ```
+
+Edit `frontend/.env` (frontend directory):
+```env
+VITE_GOOGLE_MAPS_KEY=your_google_maps_key_here
+```
+
+**Important:** The frontend needs its own Google Maps key for Places Autocomplete.
 
 ### Step 3: Start Development
 
