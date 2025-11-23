@@ -178,6 +178,51 @@ def get_config():
     })
 
 
+@app.route('/reverse_geocode', methods=['GET'])
+def reverse_geocode():
+    """Reverse geocode coordinates to city/address."""
+    try:
+        lat = float(request.args.get('lat'))
+        lng = float(request.args.get('lng'))
+        
+        result = gmaps.reverse_geocode((lat, lng))
+        
+        if result:
+            # Try to extract city name
+            address_components = result[0].get('address_components', [])
+            city = None
+            country = None
+            
+            for component in address_components:
+                types = component.get('types', [])
+                if 'locality' in types:
+                    city = component.get('long_name')
+                elif 'administrative_area_level_1' in types and not city:
+                    city = component.get('long_name')
+                if 'country' in types:
+                    country = component.get('long_name')
+            
+            # Format as "City, Country" if possible
+            if city and country:
+                formatted_address = f"{city}, {country}"
+            else:
+                formatted_address = result[0]['formatted_address']
+            
+            return jsonify({
+                'success': True,
+                'address': formatted_address,
+                'full_address': result[0]['formatted_address'],
+                'city': city,
+                'country': country
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Location not found'}), 404
+            
+    except Exception as e:
+        print(f"Reverse geocode error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/expand-maps-url', methods=['POST'])
 def expand_maps_url():
     """Expand shortened Google Maps URLs and extract coordinates."""
