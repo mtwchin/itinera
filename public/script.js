@@ -1,9 +1,12 @@
 let map;
+let destinationMap;
+let destinationMarker;
 let markers = [];
 let currentItinerary = null;
 let currentDay = 1;
 let googleMapsApiKey = '';
 let tripData = {};
+let autocomplete;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -16,19 +19,248 @@ document.addEventListener('DOMContentLoaded', async () => {
                 script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places`;
                 script.async = true;
                 script.defer = true;
+                script.onload = initializeAutocomplete;
                 document.head.appendChild(script);
         } catch (error) {
                 console.error('Error loading config:', error);
         }
 
-        document.getElementById('itineraryForm').addEventListener('submit', handleFormSubmit);
+    document.getElementById('itineraryForm').addEventListener('submit', handleFormSubmit);
+    
+    // Add accommodation link listener
+    const accommodationInput = document.getElementById('accommodationLink');
+    accommodationInput.addEventListener('blur', handleAccommodationLink);
+    accommodationInput.addEventListener('paste', (e) => {
+        setTimeout(() => handleAccommodationLink(e), 100);
+    });
+    
+    // Initialize must-do list
+    initializeMustDoList();
+    
+    // Set default dates (tomorrow to 3 days later)
+    setDefaultDates();
+});
 
-        // Add accommodation link listener
-        const accommodationInput = document.getElementById('accommodationLink');
-        accommodationInput.addEventListener('blur', handleAccommodationLink);
-        accommodationInput.addEventListener('paste', (e) => {
-                setTimeout(() => handleAccommodationLink(e), 100);
+function setDefaultDates() {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(14, 0, 0, 0); // 2 PM arrival
+    
+    const departure = new Date(tomorrow);
+    departure.setDate(departure.getDate() + 2); // 3 days total
+    departure.setHours(12, 0, 0, 0); // 12 PM departure
+    
+    document.getElementById('arrivalDate').value = formatDateTimeLocal(tomorrow);
+    document.getElementById('departureDate').value = formatDateTimeLocal(departure);
+}
+
+function formatDateTimeLocal(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function initializeMustDoList() {
+    const mustDoList = document.getElementById('mustDoList');
+    
+    // Add input listeners to all existing inputs
+    const inputs = mustDoList.querySelectorAll('.must-do-input');
+    inputs.forEach((input, index) => {
+        input.addEventListener('input', function() {
+            handleMustDoInput(this, index);
         });
+    });
+}
+
+function handleMustDoInput(input, index) {
+    const mustDoList = document.getElementById('mustDoList');
+    const allInputs = mustDoList.querySelectorAll('.must-do-input');
+    
+    // Add checkmark if filled
+    if (input.value.trim()) {
+        input.classList.add('filled');
+    } else {
+        input.classList.remove('filled');
+    }
+    
+    // If this is the last input and it has content, add a new one
+    if (index === allInputs.length - 1 && input.value.trim()) {
+        const newInput = document.createElement('input');
+        newInput.type = 'text';
+        newInput.className = 'must-do-input';
+        newInput.placeholder = 'Add another activity...';
+        newInput.addEventListener('input', function() {
+            handleMustDoInput(this, allInputs.length);
+        });
+        mustDoList.appendChild(newInput);
+    }
+}
+
+function getMustDoActivities() {
+    const inputs = document.querySelectorAll('.must-do-input');
+    const activities = [];
+    inputs.forEach(input => {
+        if (input.value.trim()) {
+            activities.push(input.value.trim());
+        }
+    });
+    return activities.join('; ');
+}
+
+function initializeAutocomplete() {
+        // Initialize Places Autocomplete on city search
+        const cityInput = document.getElementById('citySearch');
+
+        autocomplete = new google.maps.places.Autocomplete(cityInput, {
+                types: ['(cities)'],
+                fields: ['address_components', 'geometry', 'name', 'formatted_address']
+        });
+
+        autocomplete.addListener('place_changed', () => {
+                const place = autocomplete.getPlace();
+
+                if (place.geometry) {
+                        updateDestinationFromPlace(place);
+                }
+        });
+}
+
+function updateDestinationFromPlace(place) {
+        const addressComponents = place.address_components;
+        let city = '';
+        let country = '';
+
+        // Extract city and country from address components
+        for (let component of addressComponents) {
+                if (component.types.includes('locality')) {
+                        city = component.long_name;
+                } else if (component.types.includes('administrative_area_level_1') && !city) {
+                        city = component.long_name;
+                }
+                if (component.types.includes('country')) {
+                        country = component.long_name;
+                }
+        }
+
+        // Update hidden fields
+        document.getElementById('city').value = city || place.name;
+        document.getElementById('country').value = country;
+        document.getElementById('destinationLat').value = place.geometry.location.lat();
+        document.getElementById('destinationLng').value = place.geometry.location.lng();
+
+        // Update display
+        document.getElementById('citySearch').value = `${city || place.name}, ${country}`;
+}
+
+function toggleMapSelector() {
+        const modal = document.getElementById('mapSelectorModal');
+
+        if (modal.style.display === 'none') {
+                modal.style.display = 'flex';
+                initializeDestinationMap();
+        } else {
+                modal.style.display = 'none';
+        }
+}
+
+function initializeDestinationMap() {
+        if (destinationMap) return; // Already initialized
+
+        destinationMap = new google.maps.Map(document.getElementById('destinationMap'), {
+                zoom: 2,
+                center: { lat: 20, lng: 0 },
+                styles: [
+                        {
+                                featureType: "poi",
+                                elementType: "labels",
+                                stylers: [{ visibility: "off" }]
+                        }
+                ],
+                streetViewControl: false,
+                mapTypeControl: false
+        });
+
+        // Add click listener
+        destinationMap.addListener('click', async (e) => {
+                const lat = e.latLng.lat();
+                const lng = e.latLng.lng();
+
+                // Place marker
+                if (destinationMarker) {
+                        destinationMarker.setMap(null);
+                }
+
+                destinationMarker = new google.maps.Marker({
+                        position: { lat, lng },
+                        map: destinationMap,
+                        animation: google.maps.Animation.DROP
+                });
+
+                // Reverse geocode to get city name
+                const geocoder = new google.maps.Geocoder();
+                try {
+                        const result = await new Promise((resolve, reject) => {
+                                geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+                                        if (status === 'OK' && results[0]) {
+                                                resolve(results[0]);
+                                        } else {
+                                                reject(new Error('Geocoding failed'));
+                                        }
+                                });
+                        });
+
+                        // Extract city and country
+                        let city = '';
+                        let country = '';
+
+                        for (let component of result.address_components) {
+                                if (component.types.includes('locality')) {
+                                        city = component.long_name;
+                                } else if (component.types.includes('administrative_area_level_1') && !city) {
+                                        city = component.long_name;
+                                }
+                                if (component.types.includes('country')) {
+                                        country = component.long_name;
+                                }
+                        }
+
+                        // Update form fields
+                        document.getElementById('city').value = city;
+                        document.getElementById('country').value = country;
+                        document.getElementById('destinationLat').value = lat;
+                        document.getElementById('destinationLng').value = lng;
+                        document.getElementById('citySearch').value = `${city}, ${country}`;
+
+                        // Show info window
+                        const infoWindow = new google.maps.InfoWindow({
+                                content: `
+                    <div style="padding: 12px;">
+                        <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">${city}, ${country}</h3>
+                        <button onclick="toggleMapSelector()" style="background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">
+                            Select this destination
+                        </button>
+                    </div>
+                `
+                        });
+
+                        infoWindow.open(destinationMap, destinationMarker);
+
+                } catch (error) {
+                        console.error('Error geocoding:', error);
+                }
+        });
+}
+
+// Close modal when clicking outside
+document.addEventListener('click', (e) => {
+        const modal = document.getElementById('mapSelectorModal');
+        if (e.target === modal) {
+                toggleMapSelector();
+        }
 });
 
 async function handleAccommodationLink(e) {
@@ -194,6 +426,15 @@ function parseGoogleMapsLink(link) {
 async function handleFormSubmit(e) {
         e.preventDefault();
 
+        // Validate destination is selected
+        const city = document.getElementById('city').value;
+        const country = document.getElementById('country').value;
+
+        if (!city || !country) {
+                alert('Please select a destination using the search box or map.');
+                return;
+        }
+
         const accommodationInput = document.getElementById('accommodationLink');
         const accommodationData = {
                 link: accommodationInput.value,
@@ -207,16 +448,27 @@ async function handleFormSubmit(e) {
                 return;
         }
 
-        const formData = {
-                city: document.getElementById('city').value,
-                country: document.getElementById('country').value,
-                accommodation: accommodationData,
-                lengthOfStay: parseInt(document.getElementById('lengthOfStay').value),
-                groupSize: parseInt(document.getElementById('groupSize').value),
-                budget: document.getElementById('budget').value,
-                foodPreferences: document.getElementById('foodPreferences').value,
-                mustDo: document.getElementById('mustDo').value
-        };
+    // Calculate length of stay from dates
+    const arrivalDate = new Date(document.getElementById('arrivalDate').value);
+    const departureDate = new Date(document.getElementById('departureDate').value);
+    const lengthOfStay = Math.ceil((departureDate - arrivalDate) / (1000 * 60 * 60 * 24));
+    
+    if (lengthOfStay < 1) {
+        alert('Departure date must be after arrival date.');
+        return;
+    }
+    
+    const formData = {
+        city: city,
+        country: country,
+        accommodation: accommodationData,
+        arrivalDate: arrivalDate.toISOString(),
+        departureDate: departureDate.toISOString(),
+        lengthOfStay: lengthOfStay,
+        budget: document.getElementById('budget').value,
+        foodPreferences: document.getElementById('foodPreferences').value,
+        mustDo: getMustDoActivities()
+    };
 
         tripData = formData;
 
@@ -256,10 +508,14 @@ function displayItinerary(data, formData) {
         document.getElementById('formSection').style.display = 'none';
         document.getElementById('resultsSection').style.display = 'block';
 
-        // Update header
-        document.getElementById('tripTitle').textContent = `${formData.city}, ${formData.country}`;
-        document.getElementById('tripSubtitle').textContent =
-                `${formData.lengthOfStay} days • ${formData.groupSize} traveler${formData.groupSize > 1 ? 's' : ''} • Staying at: ${formData.accommodation.address.split(',')[0]}`;
+    // Update header
+    const arrivalDate = new Date(formData.arrivalDate);
+    const departureDate = new Date(formData.departureDate);
+    const dateStr = `${arrivalDate.toLocaleDateString('en-US', {month: 'short', day: 'numeric'})} - ${departureDate.toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'})}`;
+    
+    document.getElementById('tripTitle').textContent = `${formData.city}, ${formData.country}`;
+    document.getElementById('tripSubtitle').textContent = 
+        `${dateStr} • ${formData.lengthOfStay} days • ${formData.accommodation.address.split(',')[0]}`;
 
         // Create day tabs
         const dayTabs = document.getElementById('dayTabs');
@@ -506,16 +762,95 @@ function updateMapForDay(day) {
 }
 
 function exportToGoogleMaps() {
-        const dayData = currentItinerary.itinerary.find(d => d.day === currentDay);
-        if (!dayData) return;
+    const dayData = currentItinerary.itinerary.find(d => d.day === currentDay);
+    if (!dayData) return;
 
-        const baseUrl = 'https://www.google.com/maps/dir/';
-        const waypoints = dayData.activities.map(activity =>
-                `${activity.coordinates.lat},${activity.coordinates.lng}`
-        ).join('/');
+    // Create Google Maps List URL format
+    const listName = `${tripData.city} - Day ${currentDay}`;
+    const places = dayData.activities.map((activity, index) => {
+        return {
+            name: activity.name,
+            lat: activity.coordinates.lat,
+            lng: activity.coordinates.lng,
+            description: activity.description
+        };
+    });
+    
+    // Generate shareable Google Maps list
+    // Format: https://www.google.com/maps/d/edit?mid=...
+    // Since we can't programmatically create My Maps, we'll create a directions link
+    // and provide instructions for creating a list
+    
+    const baseUrl = 'https://www.google.com/maps/dir/';
+    const waypoints = dayData.activities.map(activity => 
+        `${activity.coordinates.lat},${activity.coordinates.lng}`
+    ).join('/');
 
-        const url = baseUrl + waypoints;
-        window.open(url, '_blank');
+    const directionsUrl = baseUrl + waypoints;
+    
+    // Also create a text export for manual list creation
+    const listText = `${listName}\n\n` + 
+        dayData.activities.map((activity, i) => 
+            `${i + 1}. ${activity.name}\n   ${activity.description}\n   ${activity.address}\n`
+        ).join('\n');
+    
+    // Show modal with export options
+    showExportModal(directionsUrl, listText, listName);
+}
+
+function showExportModal(directionsUrl, listText, listName) {
+    const modal = document.createElement('div');
+    modal.className = 'export-modal';
+    modal.innerHTML = `
+        <div class="export-modal-content">
+            <div class="export-modal-header">
+                <h3>Export Day ${currentDay}</h3>
+                <button class="btn-close" onclick="this.closest('.export-modal').remove()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="export-modal-body">
+                <div class="export-option">
+                    <h4>📍 Open Directions</h4>
+                    <p>View route with turn-by-turn directions</p>
+                    <button class="btn-secondary" onclick="window.open('${directionsUrl}', '_blank')">
+                        Open in Google Maps
+                    </button>
+                </div>
+                <div class="export-option">
+                    <h4>📋 Copy List</h4>
+                    <p>Copy to create your own Google Maps list</p>
+                    <textarea readonly style="width: 100%; height: 150px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: monospace;">${listText}</textarea>
+                    <button class="btn-secondary" onclick="navigator.clipboard.writeText(\`${listText.replace(/`/g, '\\`')}\`).then(() => alert('Copied to clipboard!'))">
+                        Copy to Clipboard
+                    </button>
+                </div>
+                <div class="export-option">
+                    <h4>💾 Download</h4>
+                    <p>Download as a text file</p>
+                    <button class="btn-secondary" onclick="downloadDayItinerary('${listName}', \`${listText.replace(/`/g, '\\`')}\`)">
+                        Download .txt
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function downloadDayItinerary(filename, content) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 async function refineItinerary() {

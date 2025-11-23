@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Google Maps API Diagnostics</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+        }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        .warning { background: #fff3cd; border-color: #ffeaa7; }
+        #map { width: 100%; height: 300px; margin: 20px 0; border: 1px solid #ddd; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Google Maps API Diagnostics</h1>
+    <p>This will help identify why the map isn't showing up.</p>
+    
+    <div id="results"></div>
+    
+    <h2>Test Map</h2>
+    <div id="map"></div>
+    
+    <script>
+        const results = document.getElementById('results');
+        
+        function addResult(title, message, type = 'success') {
+            const div = document.createElement('div');
+            div.className = `test ${type}`;
+            div.innerHTML = `<strong>${title}</strong><br>${message}`;
+            results.appendChild(div);
+        }
+        
+        // Check if API key is being loaded
+        fetch('http://localhost:5000/api/config')
+            .then(res => res.json())
+            .then(config => {
+                if (config.googleMapsApiKey && config.googleMapsApiKey !== 'your_google_maps_api_key_here') {
+                    addResult('✅ API Key Found', `Key starts with: ${config.googleMapsApiKey.substring(0, 20)}...`, 'success');
+                    
+                    // Load Google Maps
+                    const script = document.createElement('script');
+                    script.src = `https://maps.googleapis.com/maps/api/js?key=${config.googleMapsApiKey}&libraries=places&callback=initMap`;
+                    script.async = true;
+                    script.defer = true;
+                    script.onerror = () => {
+                        addResult('❌ Script Load Failed', 'Could not load Google Maps JavaScript API. Check your internet connection.', 'error');
+                    };
+                    document.head.appendChild(script);
+                    
+                } else {
+                    addResult('❌ API Key Missing', 'No valid API key found in .env file. Please add GOOGLE_MAPS_API_KEY to your .env file.', 'error');
+                }
+            })
+            .catch(err => {
+                addResult('❌ Server Error', `Could not connect to server: ${err.message}. Make sure the Python server is running.`, 'error');
+            });
+        
+        window.initMap = function() {
+            try {
+                addResult('✅ Google Maps Loaded', 'Google Maps JavaScript API loaded successfully!', 'success');
+                
+                // Try to create a map
+                const map = new google.maps.Map(document.getElementById('map'), {
+                    zoom: 2,
+                    center: { lat: 0, lng: 0 }
+                });
+                
+                addResult('✅ Map Created', 'Map instance created successfully! If you see a map below, everything is working.', 'success');
+                
+                // Test Places API
+                const service = new google.maps.places.PlacesService(map);
+                addResult('✅ Places API Available', 'Google Places API is accessible.', 'success');
+                
+            } catch (error) {
+                addResult('❌ Map Creation Failed', `Error: ${error.message}`, 'error');
+            }
+        };
+        
+        // Check for common errors
+        window.gm_authFailure = function() {
+            addResult('❌ Authentication Failed', 
+                'Your API key is invalid or the required APIs are not enabled.<br><br>' +
+                '<strong>Fix:</strong><br>' +
+                '1. Go to <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a><br>' +
+                '2. Enable these APIs:<br>' +
+                '   - Maps JavaScript API<br>' +
+                '   - Geocoding API<br>' +
+                '   - Places API<br>' +
+                '3. Check API Key restrictions (it should allow your localhost)', 
+                'error'
+            );
+        };
+        
+        // Monitor console errors
+        window.addEventListener('error', (e) => {
+            if (e.message.includes('Google') || e.message.includes('maps')) {
+                addResult('❌ JavaScript Error', e.message, 'error');
+            }
+        });
+        
+        // Timeout check
+        setTimeout(() => {
+            if (!window.google) {
+                addResult('⚠️ Timeout', 
+                    'Google Maps did not load within 10 seconds. Possible issues:<br>' +
+                    '- Slow internet connection<br>' +
+                    '- API key restrictions<br>' +
+                    '- Firewall blocking Google APIs', 
+                    'warning'
+                );
+            }
+        }, 10000);
+    </script>
+</body>
+</html>
+

@@ -21,11 +21,44 @@
                         <form id="itineraryForm">
                                 <!-- Essential Info -->
                                 <div class="form-section-group">
-                                        <h2>Where are you going?</h2>
+                                        <div class="section-header">
+                                                <h2>Where are you going?</h2>
+                                                <button type="button" class="btn-map-toggle" onclick="toggleMapSelector()">
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+                                                                <line x1="8" y1="2" x2="8" y2="18"></line>
+                                                                <line x1="16" y1="6" x2="16" y2="22"></line>
+                                                        </svg>
+                                                        Select on map
+                                                </button>
+                                        </div>
 
-                                        <div class="input-group">
-                                                <input type="text" id="city" name="city" placeholder="City" required>
-                                                <input type="text" id="country" name="country" placeholder="Country" required>
+                                        <input type="text" id="citySearch" name="citySearch" placeholder="Search for a city or country..." required>
+
+                                        <div class="hidden-fields">
+                                                <input type="hidden" id="city" name="city">
+                                                <input type="hidden" id="country" name="country">
+                                                <input type="hidden" id="destinationLat" name="destinationLat">
+                                                <input type="hidden" id="destinationLng" name="destinationLng">
+                                        </div>
+                                </div>
+
+                                <!-- Map Selector Modal -->
+                                <div id="mapSelectorModal" class="map-modal" style="display: none;">
+                                        <div class="map-modal-content">
+                                                <div class="map-modal-header">
+                                                        <h3>Select your destination</h3>
+                                                        <button type="button" class="btn-close" onclick="toggleMapSelector()">
+                                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                                </svg>
+                                                        </button>
+                                                </div>
+                                                <div id="destinationMap" class="destination-map"></div>
+                                                <div class="map-modal-footer">
+                                                        <p class="map-hint">Click anywhere on the map to select your destination</p>
+                                                </div>
                                         </div>
                                 </div>
 
@@ -58,35 +91,44 @@
 
                                 <!-- Trip Details -->
                                 <div class="form-section-group">
-                                        <h2>Trip details</h2>
+                                        <h2>Trip dates</h2>
 
-                                        <div class="input-row">
+                                        <div class="date-picker-group">
                                                 <div class="input-field">
-                                                        <label>Days</label>
-                                                        <input type="number" id="lengthOfStay" name="lengthOfStay" min="1" max="30" value="3" required>
+                                                        <label>Arrival</label>
+                                                        <input type="datetime-local" id="arrivalDate" name="arrivalDate" required>
                                                 </div>
                                                 <div class="input-field">
-                                                        <label>Travelers</label>
-                                                        <input type="number" id="groupSize" name="groupSize" min="1" max="50" value="2" required>
+                                                        <label>Departure</label>
+                                                        <input type="datetime-local" id="departureDate" name="departureDate" required>
                                                 </div>
-                                                <div class="input-field">
-                                                        <label>Budget</label>
-                                                        <select id="budget" name="budget">
-                                                                <option value="Budget">$</option>
-                                                                <option value="Medium" selected>$$</option>
-                                                                <option value="Luxury">$$$</option>
-                                                        </select>
-                                                </div>
+                                        </div>
+
+                                        <div class="input-field" style="margin-top: 1rem;">
+                                                <label>Budget</label>
+                                                <select id="budget" name="budget">
+                                                        <option value="Budget">Budget ($)</option>
+                                                        <option value="Medium" selected>Medium ($$)</option>
+                                                        <option value="Luxury">Luxury ($$$)</option>
+                                                </select>
                                         </div>
                                 </div>
 
                                 <!-- Preferences (Collapsible) -->
-                                <details class="preferences-section">
+                                <details class="preferences-section" open>
                                         <summary>Preferences (optional)</summary>
                                         <div class="preferences-content">
-                                                <input type="text" id="foodPreferences" name="foodPreferences" placeholder="Food preferences (e.g., vegetarian, seafood)">
+                                                <div class="input-field">
+                                                        <label>Food preferences</label>
+                                                        <input type="text" id="foodPreferences" name="foodPreferences" placeholder="e.g., vegetarian, seafood, no spicy">
+                                                </div>
 
-                                                <textarea id="mustDo" name="mustDo" rows="2" placeholder="Must-do activities or places..."></textarea>
+                                                <div class="input-field">
+                                                        <label>Must-do activities</label>
+                                                        <div id="mustDoList" class="must-do-list">
+                                                                <input type="text" class="must-do-input" placeholder="Add an activity (e.g., Visit Eiffel Tower)">
+                                                        </div>
+                                                </div>
                                         </div>
                                 </details>
 
