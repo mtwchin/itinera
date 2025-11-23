@@ -188,6 +188,8 @@ textarea {
         font-size: 0.9375rem;
         font-family: inherit;
         transition: all 0.2s;
+        box-sizing: border-box;
+        max-width: 100%;
 }
 
 input:focus,
