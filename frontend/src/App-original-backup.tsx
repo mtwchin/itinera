@@ -43,163 +43,136 @@ function App() {
         const [mapInstance, setMapInstance] = useState<any>(null)
         const [mapMarker, setMapMarker] = useState<any>(null)
         const [mapLoaded, setMapLoaded] = useState(false)
-        const [mapError, setMapError] = useState<string | null>(null)
 
         // Initialize Google Maps and Places Autocomplete
         useEffect(() => {
-                // Skip if already loaded
+                // Check if already loaded
                 if (window.google?.maps) {
-                        try {
-                                initializeMapAndAutocomplete()
-                        } catch (error) {
-                                console.error('Error initializing map:', error)
-                                setMapError('Failed to initialize map. Check console for details.')
-                        }
-                        return
-                }
-
-                const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY
-
-                if (!apiKey) {
-                        console.warn('Google Maps API key not found. Map features will be limited.')
-                        setMapError('Google Maps API key not configured.')
+                        initializeMapAndAutocomplete()
                         return
                 }
 
                 const script = document.createElement('script')
-                script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`
+                script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_KEY || ''}&libraries=places`
                 script.async = true
                 script.defer = true
 
                 script.onload = () => {
-                        console.log('Google Maps loaded successfully')
-                        try {
-                                initializeMapAndAutocomplete()
-                        } catch (error) {
-                                console.error('Error initializing map after load:', error)
-                                setMapError('Failed to initialize map. Check console for details.')
-                        }
+                        console.log('Google Maps loaded')
+                        initializeMapAndAutocomplete()
                 }
 
                 script.onerror = () => {
                         console.error('Failed to load Google Maps script')
-                        setMapError('Failed to load Google Maps. Check your API key.')
                 }
 
                 document.head.appendChild(script)
+
+                return () => {
+                        // Don't remove script on cleanup to avoid issues
+                }
         }, [])
 
         const initializeMapAndAutocomplete = () => {
                 if (!window.google?.maps) {
-                        console.error('Google Maps not available')
+                        console.error('Google Maps not available - check API key in .env')
                         return
                 }
 
-                try {
-                        // Initialize background map first
-                        const mapElement = document.getElementById('background-map')
-                        if (mapElement && !mapInstance) {
-                                console.log('Initializing map...')
-                                const map = new window.google.maps.Map(mapElement, {
-                                        center: { lat: 20, lng: 0 },
-                                        zoom: 2.5,
-                                        disableDefaultUI: false,
-                                        zoomControl: true,
-                                        mapTypeControl: false,
-                                        streetViewControl: false,
-                                        fullscreenControl: false,
-                                        gestureHandling: 'greedy',
-                                        styles: [
-                                                {
-                                                        featureType: 'poi',
-                                                        elementType: 'labels',
-                                                        stylers: [{ visibility: 'off' }]
-                                                }
-                                        ]
-                                })
-
-                                setMapInstance(map)
-                                setMapLoaded(true)
-                                console.log('Map initialized successfully!')
-
-                                // Add click listener to map
-                                map.addListener('click', async (e: any) => {
-                                        const lat = e.latLng.lat()
-                                        const lng = e.latLng.lng()
-
-                                        console.log('Map clicked:', lat, lng)
-
-                                        // Reverse geocode to get city name
-                                        try {
-                                                const response = await fetch(`/reverse_geocode?lat=${lat}&lng=${lng}`)
-                                                const data = await response.json()
-
-                                                if (data.success && data.address) {
-                                                        setDestination(data.address)
-
-                                                        // Add or update marker
-                                                        if (mapMarker) {
-                                                                mapMarker.setPosition(e.latLng)
-                                                                mapMarker.setTitle(data.address)
-                                                        } else {
-                                                                const newMarker = new window.google.maps.Marker({
-                                                                        position: e.latLng,
-                                                                        map: map,
-                                                                        title: data.address,
-                                                                        animation: window.google.maps.Animation.DROP
-                                                                })
-                                                                setMapMarker(newMarker)
-                                                        }
-                                                }
-                                        } catch (error) {
-                                                console.error('Reverse geocoding error:', error)
+                // Initialize background map first
+                const mapElement = document.getElementById('background-map')
+                if (mapElement && !mapInstance) {
+                        console.log('Initializing map...', 'API Key:', import.meta.env.VITE_GOOGLE_MAPS_KEY ? 'Present' : 'Missing')
+                        const map = new window.google.maps.Map(mapElement, {
+                                center: { lat: 20, lng: 0 },
+                                zoom: 2.5,
+                                disableDefaultUI: false,
+                                zoomControl: true,
+                                mapTypeControl: false,
+                                streetViewControl: false,
+                                fullscreenControl: false,
+                                gestureHandling: 'greedy',
+                                styles: [
+                                        {
+                                                featureType: 'poi',
+                                                elementType: 'labels',
+                                                stylers: [{ visibility: 'off' }]
                                         }
-                                })
-                        }
+                                ]
+                        })
 
-                        // Initialize autocomplete
-                        setTimeout(() => {
-                                const input = document.getElementById('destination-input') as HTMLInputElement
-                                if (input && window.google?.maps?.places) {
-                                        try {
-                                                const autocomplete = new window.google.maps.places.Autocomplete(input, {
-                                                        types: ['(cities)']
-                                                })
+                        setMapInstance(map)
+                        setMapLoaded(true)
+                        console.log('Map initialized successfully!')
 
-                                                autocomplete.addListener('place_changed', () => {
-                                                        const place = autocomplete.getPlace()
-                                                        if (place.formatted_address) {
-                                                                setDestination(place.formatted_address)
+                        // Add click listener to map
+                        map.addListener('click', async (e: any) => {
+                                const lat = e.latLng.lat()
+                                const lng = e.latLng.lng()
 
-                                                                // Center map on selected place
-                                                                if (place.geometry && mapInstance) {
-                                                                        mapInstance.setCenter(place.geometry.location)
-                                                                        mapInstance.setZoom(10)
+                                console.log('Map clicked:', lat, lng)
 
-                                                                        // Add or update marker
-                                                                        if (mapMarker) {
-                                                                                mapMarker.setPosition(place.geometry.location)
-                                                                                mapMarker.setTitle(place.formatted_address)
-                                                                        } else {
-                                                                                const newMarker = new window.google.maps.Marker({
-                                                                                        position: place.geometry.location,
-                                                                                        map: mapInstance,
-                                                                                        title: place.formatted_address,
-                                                                                        animation: window.google.maps.Animation.DROP
-                                                                                })
-                                                                                setMapMarker(newMarker)
-                                                                        }
-                                                                }
-                                                        }
-                                                })
-                                        } catch (error) {
-                                                console.error('Error setting up autocomplete:', error)
+                                // Reverse geocode to get city name
+                                try {
+                                        const response = await fetch(`/reverse_geocode?lat=${lat}&lng=${lng}`)
+                                        const data = await response.json()
+
+                                        if (data.success && data.address) {
+                                                setDestination(data.address)
+
+                                                // Add or update marker
+                                                if (mapMarker) {
+                                                        mapMarker.setPosition(e.latLng)
+                                                        mapMarker.setTitle(data.address)
+                                                } else {
+                                                        const newMarker = new window.google.maps.Marker({
+                                                                position: e.latLng,
+                                                                map: map,
+                                                                title: data.address,
+                                                                animation: window.google.maps.Animation.DROP
+                                                        })
+                                                        setMapMarker(newMarker)
+                                                }
+                                        }
+                                } catch (error) {
+                                        console.error('Reverse geocoding error:', error)
+                                }
+                        })
+                }
+
+                // Initialize autocomplete
+                const input = document.getElementById('destination-input') as HTMLInputElement
+                if (input && window.google?.maps?.places) {
+                        const autocomplete = new window.google.maps.places.Autocomplete(input, {
+                                types: ['(cities)']
+                        })
+
+                        autocomplete.addListener('place_changed', () => {
+                                const place = autocomplete.getPlace()
+                                if (place.formatted_address) {
+                                        setDestination(place.formatted_address)
+
+                                        // Center map on selected place
+                                        if (place.geometry && mapInstance) {
+                                                mapInstance.setCenter(place.geometry.location)
+                                                mapInstance.setZoom(10)
+
+                                                // Add or update marker
+                                                if (mapMarker) {
+                                                        mapMarker.setPosition(place.geometry.location)
+                                                        mapMarker.setTitle(place.formatted_address)
+                                                } else {
+                                                        const newMarker = new window.google.maps.Marker({
+                                                                position: place.geometry.location,
+                                                                map: mapInstance,
+                                                                title: place.formatted_address,
+                                                                animation: window.google.maps.Animation.DROP
+                                                        })
+                                                        setMapMarker(newMarker)
+                                                }
                                         }
                                 }
-                        }, 100)
-                } catch (error) {
-                        console.error('Error in initializeMapAndAutocomplete:', error)
-                        setMapError('Map initialization failed. Check console.')
+                        })
                 }
         }
 
@@ -288,18 +261,16 @@ function App() {
                                                 <div className="results-header">
                                                         <div>
                                                                 <h1>{destination}</h1>
-                                                                <p className="subtitle">{itinerary.itinerary.length} day itinerary</p>
+                                                                <p>{itinerary.itinerary.length} days itinerary</p>
                                                         </div>
-                                                        <button onClick={resetForm} className="btn-secondary">
-                                                                New Trip
-                                                        </button>
+                                                        <button onClick={resetForm} className="btn-secondary">New Trip</button>
                                                 </div>
 
-                                                <div className="day-selector">
-                                                        {itinerary.itinerary.map((day) => (
+                                                <div className="day-tabs">
+                                                        {itinerary.itinerary.map(day => (
                                                                 <button
                                                                         key={day.day}
-                                                                        className={`day-btn ${currentDay === day.day ? 'active' : ''}`}
+                                                                        className={`day-tab ${currentDay === day.day ? 'active' : ''}`}
                                                                         onClick={() => setCurrentDay(day.day)}
                                                                 >
                                                                         Day {day.day}
@@ -308,26 +279,23 @@ function App() {
                                                 </div>
 
                                                 {dayData && (
-                                                        <div className="day-details">
-                                                                <h2 className="day-title">{dayData.theme}</h2>
+                                                        <div className="day-content">
+                                                                <h2 className="day-theme">{dayData.theme}</h2>
 
-                                                                <div className="activities-list">
+                                                                <div className="activities">
                                                                         {dayData.activities.map((activity, idx) => (
                                                                                 <div key={idx} className="activity-card">
-                                                                                        <div className="activity-time">{activity.time}</div>
-                                                                                        <div className="activity-content">
-                                                                                                <h3>{activity.name}</h3>
-                                                                                                <p className="activity-duration">{activity.duration}</p>
-                                                                                                <p className="activity-description">{activity.description}</p>
-                                                                                                <p className="activity-address">{activity.address}</p>
+                                                                                        <div className="activity-header">
+                                                                                                <span className="activity-time">{activity.time}</span>
+                                                                                                <span className="activity-type">{activity.type}</span>
                                                                                         </div>
+                                                                                        <h3>{activity.name}</h3>
+                                                                                        <p className="duration">{activity.duration}</p>
+                                                                                        <p className="description">{activity.description}</p>
+                                                                                        <p className="address">{activity.address}</p>
                                                                                 </div>
                                                                         ))}
                                                                 </div>
-
-                                                                <button onClick={exportToGoogleMaps} className="btn-primary" style={{ marginTop: '2rem', width: '100%' }}>
-                                                                        Export Day {currentDay} to Google Maps
-                                                                </button>
                                                         </div>
                                                 )}
 
@@ -347,6 +315,12 @@ function App() {
                                                                 <strong>Budget:</strong> {itinerary.estimatedBudget}
                                                         </div>
                                                 )}
+
+                                                <div className="export-section">
+                                                        <button onClick={exportToGoogleMaps} className="btn-primary">
+                                                                Export Day {currentDay} to Google Maps
+                                                        </button>
+                                                </div>
                                         </div>
                                 </div>
                         </div>
@@ -357,26 +331,23 @@ function App() {
                 <div className="app-container">
                         {/* Background Map */}
                         <div id="background-map" className="background-map">
-                                {!mapLoaded && !mapError && (
+                                {!mapLoaded && (
                                         <div className="map-loading">
                                                 <div className="loading-spinner"></div>
                                                 <p>Loading map...</p>
-                                        </div>
-                                )}
-                                {mapError && (
-                                        <div className="map-loading">
-                                                <p style={{ color: '#ef4444' }}>⚠️ {mapError}</p>
-                                                <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
-                                                        The app will still work without the map.
-                                                </p>
+                                                {!import.meta.env.VITE_GOOGLE_MAPS_KEY && (
+                                                        <p style={{ color: '#ef4444', fontSize: '0.875rem' }}>
+                                                                ⚠️ Google Maps API key not found. Check your .env file.
+                                                        </p>
+                                                )}
                                         </div>
                                 )}
                         </div>
 
                         {/* Map Instructions */}
-                        {mapLoaded && !destination && !mapError && (
+                        {mapLoaded && !destination && (
                                 <div className="map-instructions">
-                                        Click anywhere on the map to select your destination
+                                        👆 Click anywhere on the map to select your destination
                                 </div>
                         )}
 
