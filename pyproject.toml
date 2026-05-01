@@ -1,0 +1,9 @@
+[tool.black]
+exclude = '''
+/(
+    \.claude
+  | \.git
+  | node_modules
+  | frontend/node_modules
+)/
+'''
