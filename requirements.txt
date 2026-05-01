@@ -1,13 +1,56 @@
-flask==3.0.0
-flask-cors==4.0.0
-python-dotenv==1.0.0
-openai>=1.54.0
-googlemaps==4.10.0
-requests==2.31.0
+# --- Web framework ---
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+httpx==0.28.1
+python-multipart==0.0.20
 
-# TikTok scraping (OPTIONAL - app works fine without these)
-# Requires Microsoft Visual C++ 14.0+ build tools on Windows
-# The app uses simulated TikTok data as fallback if these aren't installed
-# Uncomment below only if you want real TikTok scraping:
-# TikTokApi==6.5.2
-# playwright==1.40.0
+# --- Database (async SQLAlchemy + Alembic) ---
+sqlalchemy[asyncio]==2.0.36
+alembic==1.14.0
+asyncpg==0.30.0
+
+# --- Cache + queue ---
+redis==5.2.1
+celery[redis]==5.4.0
+
+# --- LLM + agents ---
+anthropic==0.42.0
+
+# --- External APIs ---
+googlemaps==4.10.0
+
+# --- Observability ---
+loguru==0.7.3
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-celery==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-redis==0.50b0
+prometheus-client==0.21.1
+prometheus-fastapi-instrumentator==7.0.2
+
+# --- Resilience ---
+pybreaker==1.2.0
+tenacity==9.0.0
+
+# --- ML (real K-means) ---
+scikit-learn==1.6.0
+numpy==2.2.0
+
+# --- Auth (Clerk JWT verification) ---
+pyjwt[crypto]==2.10.1
+
+# --- Misc ---
+python-dotenv==1.0.0
+
+# --- Dev / test ---
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
+ruff==0.8.4
+mypy==1.13.0
