@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App uses only standard HTTPS; no export-compliance dialog on every upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Production API endpoint; override at runtime in About > Developer for testing. -->
+	<key>ItineraAPIBaseURL</key>
+	<string>https://api.itinera.example.com</string>
+	<!-- Permits http://localhost for local backend development; HTTPS everywhere else. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

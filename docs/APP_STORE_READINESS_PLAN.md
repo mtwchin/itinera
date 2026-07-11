@@ -1,5 +1,11 @@
 # Itinera — App Store Readiness Plan
 
+> **Update (2026-07-11):** direction changed to a **native Swift/SwiftUI iOS
+> app** (in `ios/`) instead of a Capacitor wrapper, iOS-only for v1. Phase 1
+> (backend hardening) is implemented; Phases 2–3 are superseded by the native
+> app; Phase 4–5 items still apply — see `ios/README.md` for the live
+> submission checklist.
+
 Goal: take the current MVP (React/Vite web frontend + Flask API, with a
 partially built FastAPI backend) to an iOS App Store–submittable app, with
 Android/Play Store as a fast follow.

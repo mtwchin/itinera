@@ -24,3 +24,9 @@ ENV/
 
 # Node (in case of future use)
 node_modules/
+
+# Xcode
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/build/
+DerivedData/
