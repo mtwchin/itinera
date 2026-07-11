@@ -1,33 +1,140 @@
 import json
+import logging
 import os
 import random
-import re
 from datetime import datetime
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import googlemaps
 import openai
 import requests
 
-# Load environment variables
 load_dotenv()
 
-app = Flask(__name__, static_folder="public")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("itinera")
+
+app = Flask(__name__)
 CORS(app)
 
-# Initialize API clients
-openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["120 per hour"],
+    storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+)
+
+# Initialize API clients. Placeholder keys keep the app importable (tests,
+# tooling) without secrets; real calls fail at request time with a clear log.
+_openai_key = os.getenv("OPENAI_API_KEY")
+_gmaps_key = os.getenv("GOOGLE_MAPS_API_KEY")
+if not _openai_key:
+    logger.warning("OPENAI_API_KEY is not set; itinerary generation will fail")
+if not _gmaps_key:
+    logger.warning("GOOGLE_MAPS_API_KEY is not set; geocoding will fail")
+
+openai_client = openai.OpenAI(
+    api_key=_openai_key or "not-configured", timeout=90, max_retries=1
+)
+gmaps = googlemaps.Client(key=_gmaps_key or ("AIza" + "0" * 35))
 TIKTOK_API_KEY = os.getenv("TIKTOK_API_KEY")
 
-# TikTok API Configuration
 TIKTOK_API_URL = "https://open.tiktokapis.com/v2/"
+
+BUDGET_LEVELS = {"Budget", "Medium", "Luxury"}
+MAX_TRIP_DAYS = 14
+MAX_GROUP_SIZE = 20
+
+GENERIC_ERROR = "Something went wrong. Please try again."
+
+
+def _error(message, status):
+    return jsonify({"success": False, "error": message}), status
+
+
+def _validate_generate_request(data):
+    """Validate /api/generate-itinerary payload.
+
+    Returns (cleaned_dict, None) on success or (None, error_message).
+    """
+    if not isinstance(data, dict):
+        return None, "Request body must be a JSON object."
+
+    city = data.get("city")
+    if not isinstance(city, str) or not city.strip():
+        return None, "A destination city is required."
+    if len(city) > 100:
+        return None, "City name is too long."
+
+    country = data.get("country") or ""
+    if not isinstance(country, str) or len(country) > 100:
+        return None, "Invalid country."
+
+    length_of_stay = data.get("lengthOfStay")
+    if not isinstance(length_of_stay, int) or isinstance(length_of_stay, bool):
+        return None, "lengthOfStay must be a whole number of days."
+    if not 1 <= length_of_stay <= MAX_TRIP_DAYS:
+        return None, f"Trips must be between 1 and {MAX_TRIP_DAYS} days."
+
+    budget = data.get("budget", "Medium")
+    if budget not in BUDGET_LEVELS:
+        return None, "budget must be one of: " + ", ".join(sorted(BUDGET_LEVELS))
+
+    wake_up_time = data.get("wakeUpTime", "08:00")
+    if not isinstance(wake_up_time, str) or len(wake_up_time) != 5:
+        return None, "wakeUpTime must be in HH:MM format."
+    try:
+        datetime.strptime(wake_up_time, "%H:%M")
+    except ValueError:
+        return None, "wakeUpTime must be in HH:MM format."
+
+    group_size = data.get("groupSize", 2)
+    if not isinstance(group_size, int) or isinstance(group_size, bool):
+        group_size = 2
+    group_size = max(1, min(group_size, MAX_GROUP_SIZE))
+
+    accommodation = data.get("accommodation") or {}
+    if not isinstance(accommodation, dict):
+        return None, "accommodation must be an object."
+    accommodation_address = accommodation.get("address") or "City center"
+    if not isinstance(accommodation_address, str) or len(accommodation_address) > 300:
+        return None, "Accommodation address is too long."
+
+    def _clip_text(value, limit):
+        if not isinstance(value, str):
+            return ""
+        return value.strip()[:limit]
+
+    return (
+        {
+            "city": city.strip(),
+            "country": country.strip(),
+            "length_of_stay": length_of_stay,
+            "budget": budget,
+            "wake_up_time": wake_up_time,
+            "group_size": group_size,
+            "accommodation_address": accommodation_address.strip(),
+            "accommodation_coords": {
+                "lat": accommodation.get("lat", 0),
+                "lng": accommodation.get("lng", 0),
+            },
+            "food_preferences": _clip_text(data.get("foodPreferences"), 500)
+            or "None specified",
+            "must_do": _clip_text(data.get("mustDo"), 500) or "None specified",
+        },
+        None,
+    )
 
 
 def scrape_tiktok_places(city, country, num_results=10):
-    """Scrape trending places from TikTok based on city and country."""
+    """Fetch trending places from TikTok for a city, falling back to curated data."""
+    if not TIKTOK_API_KEY:
+        return simulate_tiktok_data(city, country)
+
     try:
         headers = {
             "Authorization": f"Bearer {TIKTOK_API_KEY}",
@@ -58,14 +165,13 @@ def scrape_tiktok_places(city, country, num_results=10):
         )
 
         if response.status_code == 200:
-            data = response.json()
-            return parse_tiktok_response(data, city, country)
+            return parse_tiktok_response(response.json(), city, country)
 
-        print(f"TikTok API Error: {response.status_code}")
+        logger.warning("TikTok API returned status %s", response.status_code)
         return simulate_tiktok_data(city, country)
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Error scraping TikTok: {e}")
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error fetching TikTok trends")
         return simulate_tiktok_data(city, country)
 
 
@@ -124,7 +230,7 @@ def categorize_place(description, hashtags):
 
 
 def simulate_tiktok_data(city, country):
-    """Return simulated TikTok data for testing or fallback."""
+    """Return curated fallback place data when trend data is unavailable."""
     place_templates = [
         {"name": f"{city} Historic Downtown", "type": "landmark"},
         {"name": f"{city} Food Market", "type": "food"},
@@ -143,7 +249,7 @@ def simulate_tiktok_data(city, country):
             **place,
             "city": city,
             "country": country,
-            "description": f"Popular spot in {city}, {country} trending on TikTok",
+            "description": f"Popular spot in {city}, {country}",
             "views": random.randint(10000, 5000000),
             "engagement": random.randint(1000, 500000),
         }
@@ -153,33 +259,34 @@ def simulate_tiktok_data(city, country):
 
 @app.route("/")
 def index():
-    """Serve the main index page."""
-    return send_from_directory("public", "index.html")
+    """Service info."""
+    return jsonify({"service": "itinera-api", "status": "ok"})
 
 
-@app.route("/<path:path>")
-def static_files(path):
-    """Serve static files from the public directory."""
-    return send_from_directory("public", path)
-
-
-@app.route("/api/config", methods=["GET"])
-def get_config():
-    """Return configuration for frontend."""
-    return jsonify({"googleMapsApiKey": os.getenv("GOOGLE_MAPS_API_KEY")})
+@app.route("/healthz")
+def healthz():
+    """Health check for load balancers / uptime monitors."""
+    return jsonify({"status": "ok"})
 
 
 @app.route("/reverse_geocode", methods=["GET"])
+@limiter.limit("60 per hour")
 def reverse_geocode():
     """Reverse geocode coordinates to city/address."""
     try:
-        lat = float(request.args.get("lat"))
-        lng = float(request.args.get("lng"))
+        lat = float(request.args.get("lat", ""))
+        lng = float(request.args.get("lng", ""))
+    except ValueError:
+        return _error("lat and lng query parameters are required numbers.", 400)
 
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return _error("Coordinates out of range.", 400)
+
+    try:
         result = gmaps.reverse_geocode((lat, lng))
 
         if not result:
-            return jsonify({"success": False, "error": "Location not found"}), 404
+            return _error("Location not found", 404)
 
         address_components = result[0].get("address_components", [])
         city = None
@@ -209,82 +316,26 @@ def reverse_geocode():
             }
         )
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Reverse geocode error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/expand-maps-url", methods=["POST"])
-def expand_maps_url():
-    """Expand shortened Google Maps URLs and extract coordinates."""
-    try:
-        data = request.json
-        short_url = data.get("url")
-
-        if not short_url:
-            return jsonify({"success": False, "error": "No URL provided"}), 400
-
-        response = requests.get(short_url, allow_redirects=True, timeout=10)
-        full_url = response.url
-
-        print(f"Expanded URL: {full_url}")
-
-        patterns = [
-            r"@(-?\d+\.\d+),(-?\d+\.\d+)",
-            r"[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)",
-            r"[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)",
-            r"/place/[^\/]+/@(-?\d+\.\d+),(-?\d+\.\d+)",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, full_url)
-            if match:
-                lat = float(match.group(1))
-                lng = float(match.group(2))
-                return jsonify(
-                    {
-                        "success": True,
-                        "coordinates": {"lat": lat, "lng": lng},
-                        "fullUrl": full_url,
-                    }
-                )
-
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Could not extract coordinates from URL",
-                }
-            ),
-            400,
-        )
-
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Error expanding URL: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Reverse geocode failed")
+        return _error(GENERIC_ERROR, 500)
 
 
 @app.route("/api/generate-itinerary", methods=["POST"])
+@limiter.limit("10 per hour")
 def generate_itinerary():  # pylint: disable=too-many-locals
-    """Generate AI-powered itinerary based on TikTok trends."""
-    try:
-        data = request.json
-        city = data.get("city")
-        country = data.get("country")
-        accommodation = data.get("accommodation", {})
-        accommodation_address = accommodation.get("address", "City center")
-        accommodation_coords = {
-            "lat": accommodation.get("lat", 0),
-            "lng": accommodation.get("lng", 0),
-        }
-        length_of_stay = data.get("lengthOfStay")
-        group_size = data.get("groupSize")
-        wake_up_time = data.get("wakeUpTime", "08:00")
-        food_preferences = data.get("foodPreferences", "None specified")
-        must_do = data.get("mustDo", "None specified")
-        budget = data.get("budget", "Medium")
+    """Generate AI-powered itinerary based on trending places."""
+    cleaned, validation_error = _validate_generate_request(
+        request.get_json(silent=True)
+    )
+    if validation_error:
+        return _error(validation_error, 400)
 
-        print(f"Fetching TikTok trends for {city}, {country}...")
+    city = cleaned["city"]
+    country = cleaned["country"]
+
+    try:
+        logger.info("Generating itinerary for %s, %s", city, country)
         trending_places = scrape_tiktok_places(city, country)
 
         for place in trending_places:
@@ -297,46 +348,44 @@ def generate_itinerary():  # pylint: disable=too-many-locals
                         "lng": location["lng"],
                     }
                     place["address"] = geocode_result[0]["formatted_address"]
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                print(f"Geocoding error for {place['name']}: {e}")
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("Geocoding error for %s", place["name"])
                 place["coordinates"] = {"lat": 0, "lng": 0}
                 place["address"] = f"{city}, {country}"
 
         places_list = "\n".join(
             [
-                f"{i+1}. {p['name']} ({p['type']}) - {p.get('views', 0):,} TikTok views"
+                f"{i+1}. {p['name']} ({p['type']}) - {p.get('views', 0):,} views"
                 for i, p in enumerate(trending_places)
             ]
         )
 
-        prompt = f"""You are a travel expert creating an itinerary based on trending TikTok locations.
+        prompt = f"""You are a travel expert creating an itinerary based on trending locations.
 
 Destination: {city}, {country}
-Accommodation: {accommodation_address} (coordinates: {accommodation_coords['lat']}, {accommodation_coords['lng']})
-Duration: {length_of_stay} days
-Group size: {group_size} people
-Wake up time: {wake_up_time} (start activities accordingly)
-Food preferences: {food_preferences}
-Must-do activities: {must_do}
-Budget: {budget}
+Accommodation: {cleaned['accommodation_address']} (coordinates: {cleaned['accommodation_coords']['lat']}, {cleaned['accommodation_coords']['lng']})
+Duration: {cleaned['length_of_stay']} days
+Group size: {cleaned['group_size']} people
+Wake up time: {cleaned['wake_up_time']} (start activities accordingly)
+Food preferences: {cleaned['food_preferences']}
+Must-do activities: {cleaned['must_do']}
+Budget: {cleaned['budget']}
 
-Trending places from TikTok (sorted by popularity):
+Trending places (sorted by popularity):
 {places_list}
 
-IMPORTANT: The traveler is staying at {accommodation_address}. Use this as the starting and ending point for EACH day.
+IMPORTANT: The traveler is staying at {cleaned['accommodation_address']}. Use this as the starting and ending point for EACH day.
 
-Create a {length_of_stay}-day itinerary that:
-1. STARTS each day from the accommodation location: {accommodation_address} around {wake_up_time}
+Create a {cleaned['length_of_stay']}-day itinerary that:
+1. STARTS each day from the accommodation location around {cleaned['wake_up_time']}
 2. ENDS each day returning to the accommodation location
 3. Groups nearby attractions efficiently to minimize travel time from accommodation
-4. Uses geographic clustering (K-means) but considers accommodation as the daily base point
-5. Plans routes in logical loops/circuits that return to accommodation
-6. Balances different types of activities (culture, food, nature, shopping)
-7. Provides realistic timing including travel time to/from accommodation and wake up time
-8. Includes the must-do activities if specified
-9. Includes food recommendations based on preferences
-10. Prioritizes places with higher TikTok engagement
-11. Suggests best times to leave accommodation and expected return times based on {wake_up_time} wake up time
+4. Plans routes in logical loops/circuits that return to accommodation
+5. Balances different types of activities (culture, food, nature, shopping)
+6. Provides realistic timing including travel time to/from accommodation
+7. Includes the must-do activities if specified
+8. Includes food recommendations based on preferences
+9. Prioritizes places with higher engagement
 
 Format your response as a JSON object with this structure:
 {{
@@ -395,26 +444,41 @@ IMPORTANT: Return ONLY the JSON object, no other text."""
             }
         )
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Error generating itinerary: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error generating itinerary")
+        return _error(GENERIC_ERROR, 500)
 
 
 @app.route("/api/refine-itinerary", methods=["POST"])
+@limiter.limit("20 per hour")
 def refine_itinerary():
     """Refine existing itinerary based on user feedback."""
-    try:
-        data = request.json
-        current_itinerary = data.get("currentItinerary")
-        user_feedback = data.get("userFeedback")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _error("Request body must be a JSON object.", 400)
 
+    current_itinerary = data.get("currentItinerary")
+    user_feedback = data.get("userFeedback")
+
+    if not isinstance(current_itinerary, dict) or not current_itinerary:
+        return _error("currentItinerary is required.", 400)
+    if not isinstance(user_feedback, str) or not user_feedback.strip():
+        return _error("userFeedback is required.", 400)
+    if len(user_feedback) > 1000:
+        return _error("Feedback is too long (1000 character max).", 400)
+
+    serialized = json.dumps(current_itinerary, indent=2)
+    if len(serialized) > 50000:
+        return _error("Itinerary is too large to refine.", 400)
+
+    try:
         prompt = f"""The user has the following itinerary and wants to make changes:
 
 Current Itinerary:
-{json.dumps(current_itinerary, indent=2)}
+{serialized}
 
 User Feedback/Changes:
-{user_feedback}
+{user_feedback.strip()}
 
 Please provide an updated itinerary incorporating their feedback. Maintain the same JSON structure.
 Return ONLY the JSON object, no other text."""
@@ -436,27 +500,12 @@ Return ONLY the JSON object, no other text."""
 
         return jsonify({"success": True, "data": refined_itinerary})
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Error refining itinerary: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/search-places", methods=["POST"])
-def search_places():
-    """Search for places using Google Maps Places API."""
-    try:
-        data = request.json
-        query = data.get("query")
-        location = data.get("location")
-
-        places_result = gmaps.places(query=query, location=location)
-
-        return jsonify({"success": True, "places": places_result.get("results", [])})
-
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        return jsonify({"success": False, "error": str(e)}), 500
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error refining itinerary")
+        return _error(GENERIC_ERROR, 500)
 
 
 if __name__ == "__main__":
-    print("Starting Itinera server...")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug = os.getenv("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
+    logger.info("Starting Itinera server (debug=%s)...", debug)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=debug)

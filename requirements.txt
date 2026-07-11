@@ -1,4 +1,12 @@
-# --- Web framework ---
+# --- v1 API (Flask, deployed for the iOS app) ---
+flask==3.1.0
+flask-cors==5.0.0
+flask-limiter==3.12
+gunicorn==23.0.0
+openai==1.59.7
+requests==2.32.3
+
+# --- Web framework (FastAPI scaffold, post-v1 migration) ---
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
