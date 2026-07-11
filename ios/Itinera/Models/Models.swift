@@ -59,6 +59,29 @@ struct Itinerary: Codable, Hashable {
     var estimatedBudget: String?
 }
 
+/// A trending place surfaced alongside the generated itinerary.
+struct TrendingPlace: Codable, Hashable {
+    var name: String?
+    var type: String?
+    var description: String?
+    var address: String?
+    var views: Int?
+    var engagement: Int?
+    var coordinates: Coordinates?
+
+    var displayName: String { name ?? "Popular spot" }
+
+    var systemImageName: String {
+        switch type?.lowercased() {
+        case "food": return "fork.knife"
+        case "culture": return "building.columns"
+        case "nature": return "leaf"
+        case "shopping": return "bag"
+        default: return "mappin.and.ellipse"
+        }
+    }
+}
+
 // MARK: - Generation request
 
 struct AccommodationRequest: Codable {
@@ -91,6 +114,8 @@ struct SavedTrip: Codable, Identifiable, Hashable {
     var budget: String
     var createdAt: Date
     var itinerary: Itinerary
+    // Optional so trips saved by earlier versions still decode.
+    var trendingPlaces: [TrendingPlace]? = nil
 
     var dayCount: Int { itinerary.itinerary.count }
 }

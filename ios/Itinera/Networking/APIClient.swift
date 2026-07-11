@@ -35,10 +35,51 @@ struct APIClient {
         return URL(string: "http://localhost:5000")!
     }
 
-    func generateItinerary(_ request: GenerateItineraryRequest) async throws -> Itinerary {
-        try await post(path: "api/generate-itinerary", body: request)
+    struct GenerationResult {
+        var itinerary: Itinerary
+        var trendingPlaces: [TrendingPlace]
     }
 
+    private struct GenerateEnvelope: Codable {
+        var success: Bool
+        var data: Itinerary?
+        var trendingPlaces: [TrendingPlace]?
+        var error: String?
+    }
+
+    private struct RefineBody: Codable {
+        var currentItinerary: Itinerary
+        var userFeedback: String
+    }
+
+    func generateItinerary(_ request: GenerateItineraryRequest) async throws -> GenerationResult {
+        let envelope: GenerateEnvelope = try await post(
+            path: "api/generate-itinerary",
+            body: request
+        )
+        guard envelope.success, let itinerary = envelope.data else {
+            throw APIError.server(envelope.error ?? "The server couldn't generate an itinerary.")
+        }
+        return GenerationResult(
+            itinerary: itinerary,
+            trendingPlaces: envelope.trendingPlaces ?? []
+        )
+    }
+
+    func refineItinerary(_ current: Itinerary, feedback: String) async throws -> Itinerary {
+        let envelope: APIEnvelope<Itinerary> = try await post(
+            path: "api/refine-itinerary",
+            body: RefineBody(currentItinerary: current, userFeedback: feedback)
+        )
+        guard envelope.success, let itinerary = envelope.data else {
+            throw APIError.server(envelope.error ?? "The server couldn't refine the itinerary.")
+        }
+        return itinerary
+    }
+
+    /// POSTs `body` and decodes the raw response as `Response`, mapping
+    /// transport-level failures to friendly errors. Callers unwrap their own
+    /// success/data envelope so endpoint-specific fields survive decoding.
     private func post<Body: Codable, Response: Codable>(
         path: String,
         body: Body
@@ -61,16 +102,10 @@ struct APIClient {
             throw APIError.rateLimited
         }
 
-        let envelope: APIEnvelope<Response>
         do {
-            envelope = try JSONDecoder().decode(APIEnvelope<Response>.self, from: data)
+            return try JSONDecoder().decode(Response.self, from: data)
         } catch {
             throw APIError.server("The server returned an unexpected response.")
         }
-
-        guard envelope.success, let payload = envelope.data else {
-            throw APIError.server(envelope.error ?? "The server couldn't complete the request.")
-        }
-        return payload
     }
 }

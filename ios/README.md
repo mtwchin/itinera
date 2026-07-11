@@ -4,6 +4,12 @@ Native SwiftUI app (iOS 17+). Talks to the Flask API (`app.py` at the repo
 root); destination search and maps are Apple MapKit, so **no Google Maps key
 ships in the app**.
 
+Features: gradient-themed plan form with on-device city search, staged
+generation progress, timeline itinerary view with per-day map and route
+export, **"Tweak this trip" AI refinement** (uses `/api/refine-itinerary`),
+trending-places carousel, offline saved trips with countdowns, rename/share
+via context menu, share-sheet export, and haptic feedback throughout.
+
 ## Structure
 
 ```
@@ -16,8 +22,9 @@ ios/
     ├── Networking/          APIClient (async/await, envelope decoding)
     ├── Stores/              TripStore — saved trips as JSON in Documents (offline)
     ├── Search/              MKLocalSearchCompleter wrapper for destination picking
+    ├── Theme.swift          Brand gradient, card style, haptics, formatters
     ├── Views/               PlanView, DestinationSearchView, GeneratingView,
-    │                        ItineraryView, TripsView, AboutView
+    │                        ItineraryView, RefineSheet, TripsView, AboutView
     └── Assets.xcassets      AppIcon (placeholder), AccentColor
 ```
 

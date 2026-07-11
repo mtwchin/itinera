@@ -37,62 +37,29 @@ struct PlanView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Where are you going?") {
-                    Button {
-                        showingDestinationSearch = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(.secondary)
-                            Text(destination?.displayName ?? "Search for a city")
-                                .foregroundStyle(destination == nil ? .secondary : .primary)
-                            Spacer()
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
+            ScrollView {
+                VStack(spacing: 16) {
+                    hero
 
-                Section("Where are you staying?") {
-                    TextField("Hotel name or address", text: $accommodation)
-                        .textInputAutocapitalization(.words)
-                }
+                    destinationCard
+                    stayCard
+                    datesCard
+                    preferencesCard
 
-                Section("Trip dates") {
-                    DatePicker("Arrival", selection: $arrivalDate, displayedComponents: .date)
-                    DatePicker("Departure", selection: $departureDate, in: arrivalDate..., displayedComponents: .date)
-                    LabeledContent("Length", value: "\(tripDays) day\(tripDays == 1 ? "" : "s")")
-                }
+                    generateButton
 
-                Section("Preferences") {
-                    DatePicker("Wake up time", selection: $wakeUpTime, displayedComponents: .hourAndMinute)
-                    Picker("Budget", selection: $budget) {
-                        Text("Budget $").tag("Budget")
-                        Text("Medium $$").tag("Medium")
-                        Text("Luxury $$$").tag("Luxury")
-                    }
-                    Stepper("Travelers: \(groupSize)", value: $groupSize, in: 1...20)
-                    TextField("Food preferences (optional)", text: $foodPreferences)
-                    TextField("Must-do activities (optional)", text: $mustDo)
+                    Text(validationMessage ?? "Itineraries are AI-generated — double-check hours and addresses before you go.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
                 }
-
-                Section {
-                    Button {
-                        generate()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text("Generate Itinerary")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
-                    }
-                    .disabled(validationMessage != nil || isGenerating)
-                } footer: {
-                    Text(validationMessage ?? "Itineraries are AI-generated — double-check opening hours and addresses before you go.")
-                }
+                .padding(.horizontal)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Itinera")
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .sheet(isPresented: $showingDestinationSearch) {
                 DestinationSearchView { selected in
                     destination = selected
@@ -118,6 +85,118 @@ struct PlanView: View {
             }
         }
     }
+
+    // MARK: - Sections
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Where to next?")
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+            Text("Trending spots, planned into your days.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .background(Theme.gradient)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Image(systemName: "airplane.departure")
+                .font(.system(size: 44))
+                .foregroundStyle(.white.opacity(0.25))
+                .padding(20)
+        }
+        .padding(.top, 8)
+    }
+
+    private var destinationCard: some View {
+        FormCard(title: "Destination", systemImage: "globe.europe.africa.fill") {
+            Button {
+                Haptics.tap()
+                showingDestinationSearch = true
+            } label: {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    Text(destination?.displayName ?? "Search for a city")
+                        .foregroundStyle(destination == nil ? .secondary : .primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(12)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var stayCard: some View {
+        FormCard(title: "Staying at", systemImage: "bed.double.fill") {
+            TextField("Hotel name or address", text: $accommodation)
+                .textInputAutocapitalization(.words)
+                .padding(12)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private var datesCard: some View {
+        FormCard(title: "Dates", systemImage: "calendar") {
+            DatePicker("Arrival", selection: $arrivalDate, displayedComponents: .date)
+            Divider()
+            DatePicker("Departure", selection: $departureDate, in: arrivalDate..., displayedComponents: .date)
+            Divider()
+            LabeledContent("Length") {
+                Text("\(tripDays) day\(tripDays == 1 ? "" : "s")")
+                    .fontWeight(.medium)
+                    .foregroundStyle(tripDays > maxTripDays ? .red : .primary)
+            }
+        }
+    }
+
+    private var preferencesCard: some View {
+        FormCard(title: "Preferences", systemImage: "slider.horizontal.3") {
+            DatePicker("Wake up time", selection: $wakeUpTime, displayedComponents: .hourAndMinute)
+            Divider()
+            Picker("Budget", selection: $budget) {
+                Text("$").tag("Budget")
+                Text("$$").tag("Medium")
+                Text("$$$").tag("Luxury")
+            }
+            .pickerStyle(.segmented)
+            Divider()
+            Stepper("Travelers: \(groupSize)", value: $groupSize, in: 1...20)
+            Divider()
+            TextField("Food preferences (optional)", text: $foodPreferences)
+            Divider()
+            TextField("Must-do activities (optional)", text: $mustDo)
+        }
+    }
+
+    private var generateButton: some View {
+        Button {
+            generate()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "wand.and.stars")
+                Text("Generate Itinerary")
+                    .font(.headline)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                Theme.gradient.opacity(validationMessage == nil ? 1 : 0.4),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+        }
+        .disabled(validationMessage != nil || isGenerating)
+        .padding(.top, 4)
+    }
+
+    // MARK: - Actions
 
     private func generate() {
         guard let destination, validationMessage == nil else { return }
@@ -152,7 +231,8 @@ struct PlanView: View {
         Task {
             defer { isGenerating = false }
             do {
-                let itinerary = try await APIClient().generateItinerary(request)
+                let result = try await APIClient().generateItinerary(request)
+                Haptics.success()
                 generatedTrip = SavedTrip(
                     id: UUID(),
                     destination: destination.displayName,
@@ -160,12 +240,32 @@ struct PlanView: View {
                     endDate: departureDate,
                     budget: budget,
                     createdAt: .now,
-                    itinerary: itinerary
+                    itinerary: result.itinerary,
+                    trendingPlaces: result.trendingPlaces
                 )
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+/// Rounded card with an icon-labelled header, used by the Plan form.
+struct FormCard<Content: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.brandStart)
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardBackground()
     }
 }
 

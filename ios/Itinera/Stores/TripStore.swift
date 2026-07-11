@@ -25,6 +25,26 @@ final class TripStore: ObservableObject {
         save()
     }
 
+    func delete(id: UUID) {
+        trips.removeAll { $0.id == id }
+        save()
+    }
+
+    /// Replaces a stored trip (e.g. after a refine) if it exists.
+    func update(_ trip: SavedTrip) {
+        guard let index = trips.firstIndex(where: { $0.id == trip.id }) else { return }
+        trips[index] = trip
+        save()
+    }
+
+    func rename(id: UUID, to newName: String) {
+        guard let index = trips.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        trips[index].destination = trimmed
+        save()
+    }
+
     func contains(id: UUID) -> Bool {
         trips.contains { $0.id == id }
     }
