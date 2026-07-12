@@ -4,6 +4,9 @@ This document turns "scalable" into a measurable launch target. The numbers
 are an initial engineering envelope, not a demand forecast; they must be
 revisited with product analytics after TestFlight.
 
+Implementation status, current contradictions, and the ordered completion
+backlog are tracked in [next-completion-plan.md](next-completion-plan.md).
+
 ## Version 1 product scope
 
 Version 1 includes anonymous onboarding, trip creation, recoverable itinerary
