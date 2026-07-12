@@ -229,6 +229,103 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(stored?.refreshToken, "guest-refresh")
     }
 
+    func testPopularItineraryEndpointsDecodeSnakeCaseResponses() async throws {
+        let credentialStore = MemoryCredentialStore(
+            installationID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            credentials: validCredentials
+        )
+        let client = makeClient(credentialStore: credentialStore)
+
+        URLProtocolStub.setHandler { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-1")
+            switch request.url?.path {
+            case "/api/v1/popular-itineraries":
+                return .json(
+                    statusCode: 200,
+                    body: """
+                    [
+                      {
+                        "id": "11111111-2222-3333-4444-555555555555",
+                        "title": "Lisbon in Three Days",
+                        "summary": "A walkable city route.",
+                        "city": "Lisbon",
+                        "country": "Portugal",
+                        "location_key": "lisbon/portugal",
+                        "duration_days": 3,
+                        "save_count": 42,
+                        "is_saved": false
+                      }
+                    ]
+                    """
+                )
+            case "/api/v1/popular-itineraries/11111111-2222-3333-4444-555555555555":
+                return .json(statusCode: 200, body: self.popularDetailJSON)
+            default:
+                XCTFail("Unexpected URL: \(request.url?.absoluteString ?? "nil")")
+                return .json(statusCode: 404, body: "{}")
+            }
+        }
+
+        let summaries = try await client.popularItineraries()
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries[0].locationName, "Lisbon, Portugal")
+        XCTAssertEqual(summaries[0].durationDays, 3)
+        XCTAssertEqual(summaries[0].saveCount, 42)
+
+        let detail = try await client.popularItinerary(summaries[0].id)
+        XCTAssertEqual(detail.title, "Lisbon in Three Days")
+        XCTAssertEqual(detail.result.itinerary.first?.activities.first?.name, "Praça do Comércio")
+    }
+
+    func testSavePopularItineraryUsesPutAndDecodesLibraryCopy() async throws {
+        let credentialStore = MemoryCredentialStore(
+            installationID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            credentials: validCredentials
+        )
+        let client = makeClient(credentialStore: credentialStore)
+
+        URLProtocolStub.setHandler { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/api/v1/popular-itineraries/11111111-2222-3333-4444-555555555555/saved"
+            )
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertNil(request.bodyData)
+            return .json(
+                statusCode: 200,
+                body: """
+                {
+                  "created": true,
+                  "saved_itinerary": {
+                    "job_id": "saved-popular-1",
+                    "status": "succeeded",
+                    "title": "Lisbon in Three Days",
+                    "source_public_itinerary_id": "11111111-2222-3333-4444-555555555555",
+                    "city": "Lisbon",
+                    "country": "Portugal",
+                    "arrival_date": null,
+                    "departure_date": null,
+                    "result": null,
+                    "error": null,
+                    "created_at": "2026-07-12T12:00:00Z"
+                  }
+                }
+                """
+            )
+        }
+
+        let response = try await client.savePopularItinerary(
+            "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertTrue(response.created)
+        XCTAssertEqual(response.savedItinerary.displayTitle, "Lisbon in Three Days")
+        XCTAssertEqual(
+            response.savedItinerary.sourcePublicItineraryId,
+            "11111111-2222-3333-4444-555555555555"
+        )
+    }
+
     func testPollingDelayIsExponentiallyBoundedAndJittered() {
         let policy = JobPollingPolicy(
             initialDelay: 1,
@@ -272,6 +369,57 @@ final class APIClientTests: XCTestCase {
             mustDo: nil,
             budget: "Medium"
         )
+    }
+
+    private var validCredentials: AuthCredentials {
+        AuthCredentials(
+            accessToken: "access-1",
+            refreshToken: "refresh-1",
+            tokenType: "Bearer",
+            expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
+        )
+    }
+
+    private var popularDetailJSON: String {
+        """
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "title": "Lisbon in Three Days",
+          "summary": "A walkable city route.",
+          "city": "Lisbon",
+          "country": "Portugal",
+          "location_key": "lisbon/portugal",
+          "duration_days": 3,
+          "save_count": 42,
+          "is_saved": false,
+          "result": {
+            "itinerary": [
+              {
+                "day": 1,
+                "theme": "Historic Lisbon",
+                "activities": [
+                  {
+                    "time": "09:00",
+                    "name": "Praça do Comércio",
+                    "type": "culture",
+                    "duration": "1 hour",
+                    "description": "Explore the riverside square.",
+                    "address": "Praça do Comércio, Lisbon",
+                    "coordinates": {"lat": 38.7078, "lng": -9.1366}
+                  }
+                ]
+              }
+            ],
+            "tips": ["Wear comfortable shoes."],
+            "accommodation_info": {
+              "morning_start": "09:00",
+              "evening_return": "18:00",
+              "transportation_tips": "Walk and use the metro."
+            },
+            "estimated_budget": "$150 per person"
+          }
+        }
+        """
     }
 }
 

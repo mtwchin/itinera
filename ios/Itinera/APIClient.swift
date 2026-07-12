@@ -154,6 +154,28 @@ actor APIClient {
         try await send(path: "/api/v1/itineraries", as: [SavedItinerary].self)
     }
 
+    func popularItineraries() async throws -> [PopularItinerarySummary] {
+        try await send(
+            path: "/api/v1/popular-itineraries",
+            as: [PopularItinerarySummary].self
+        )
+    }
+
+    func popularItinerary(_ itineraryID: String) async throws -> PopularItineraryDetail {
+        try await send(
+            path: "/api/v1/popular-itineraries/\(itineraryID)",
+            as: PopularItineraryDetail.self
+        )
+    }
+
+    func savePopularItinerary(_ itineraryID: String) async throws -> SavePopularItineraryResponse {
+        try await send(
+            path: "/api/v1/popular-itineraries/\(itineraryID)/saved",
+            method: "PUT",
+            as: SavePopularItineraryResponse.self
+        )
+    }
+
     func awaitItinerary(
         _ jobID: String,
         policy: JobPollingPolicy = JobPollingPolicy()

@@ -1,0 +1,143 @@
+[
+  {
+    "id": "1cb63d88-c68e-5e9c-9f78-04090101b325",
+    "title": "Lisbon Hills and Riverside",
+    "summary": "A walkable day through Alfama, central Lisbon, and the Tagus riverfront.",
+    "city": "Lisbon",
+    "country": "Portugal",
+    "location_key": "pt/lisbon",
+    "duration_days": 1,
+    "is_active": true,
+    "editorial_rank": 1,
+    "published_at": "2026-07-12T12:00:00Z",
+    "result": {
+      "itinerary": [
+        {
+          "day": 1,
+          "theme": "Old streets and river light",
+          "activities": [
+            {
+              "time": "09:00",
+              "name": "Lisbon Cathedral",
+              "type": "culture",
+              "duration": "1 hour",
+              "description": "Begin at Lisbon's oldest cathedral before walking into Alfama.",
+              "address": "Largo da Sé, 1100-585 Lisboa, Portugal",
+              "coordinates": {"lat": 38.7099, "lng": -9.1326}
+            },
+            {
+              "time": "15:00",
+              "name": "Praça do Comércio",
+              "type": "landmark",
+              "duration": "90 minutes",
+              "description": "Explore the monumental riverfront square and nearby arcades.",
+              "address": "Praça do Comércio, 1100-148 Lisboa, Portugal",
+              "coordinates": {"lat": 38.7077, "lng": -9.1366}
+            }
+          ]
+        }
+      ],
+      "tips": ["Wear shoes with good grip for Lisbon's steep, tiled streets."],
+      "accommodation_info": {
+        "morning_start": "Start from central Lisbon around 09:00.",
+        "evening_return": "Return after a riverfront dinner.",
+        "transportation_tips": "Walk between central stops and use a tram only when needed."
+      },
+      "estimated_budget": "Approximately €45–€80 per person"
+    }
+  },
+  {
+    "id": "70a82955-7444-5d53-a754-cc3ad8e3fbe1",
+    "title": "Tokyo Gardens and Neon",
+    "summary": "A balanced Tokyo day pairing a quiet historic garden with Shibuya after dark.",
+    "city": "Tokyo",
+    "country": "Japan",
+    "location_key": "jp/tokyo",
+    "duration_days": 1,
+    "is_active": true,
+    "editorial_rank": 1,
+    "published_at": "2026-07-12T12:00:00Z",
+    "result": {
+      "itinerary": [
+        {
+          "day": 1,
+          "theme": "Garden calm to city energy",
+          "activities": [
+            {
+              "time": "09:00",
+              "name": "Shinjuku Gyoen National Garden",
+              "type": "nature",
+              "duration": "2 hours",
+              "description": "Take a relaxed morning walk through the garden's varied landscapes.",
+              "address": "11 Naitomachi, Shinjuku City, Tokyo 160-0014, Japan",
+              "coordinates": {"lat": 35.6852, "lng": 139.7101}
+            },
+            {
+              "time": "18:00",
+              "name": "Shibuya Crossing",
+              "type": "landmark",
+              "duration": "90 minutes",
+              "description": "See the crossing at dusk and explore the surrounding streets.",
+              "address": "2 Chome-24-1 Shibuya, Tokyo 150-0002, Japan",
+              "coordinates": {"lat": 35.6595, "lng": 139.7005}
+            }
+          ]
+        }
+      ],
+      "tips": ["Load a transit card before setting out to simplify train transfers."],
+      "accommodation_info": {
+        "morning_start": "Leave from a station on the central rail loop by 08:30.",
+        "evening_return": "Plan the return after the evening rush.",
+        "transportation_tips": "Rail is the fastest connection between Shinjuku and Shibuya."
+      },
+      "estimated_budget": "Approximately ¥7,000–¥12,000 per person"
+    }
+  },
+  {
+    "id": "5cc9327e-b123-5f69-ab0d-b97273e1b0f9",
+    "title": "New York Park to Skyline",
+    "summary": "Classic Manhattan sights from Central Park to an evening skyline viewpoint.",
+    "city": "New York City",
+    "country": "United States",
+    "location_key": "us/new-york-city",
+    "duration_days": 1,
+    "is_active": true,
+    "editorial_rank": 1,
+    "published_at": "2026-07-12T12:00:00Z",
+    "result": {
+      "itinerary": [
+        {
+          "day": 1,
+          "theme": "Green spaces and Manhattan views",
+          "activities": [
+            {
+              "time": "09:00",
+              "name": "Central Park Bethesda Terrace",
+              "type": "nature",
+              "duration": "2 hours",
+              "description": "Walk the park paths to Bethesda Terrace and the lake.",
+              "address": "72 Terrace Dr, New York, NY 10024, United States",
+              "coordinates": {"lat": 40.7739, "lng": -73.9709}
+            },
+            {
+              "time": "17:30",
+              "name": "Top of the Rock",
+              "type": "landmark",
+              "duration": "90 minutes",
+              "description": "Time an observation-deck visit for sunset over Manhattan.",
+              "address": "30 Rockefeller Plaza, New York, NY 10112, United States",
+              "coordinates": {"lat": 40.7593, "lng": -73.9794}
+            }
+          ]
+        }
+      ],
+      "tips": ["Reserve timed observation-deck admission before the day of your visit."],
+      "accommodation_info": {
+        "morning_start": "Start near a subway line serving the Upper West or East Side.",
+        "evening_return": "Allow extra time for busy Midtown stations after sunset.",
+        "transportation_tips": "Use the subway for the long leg and walk within each neighborhood."
+      },
+      "estimated_budget": "Approximately $90–$150 per person"
+    }
+  }
+]

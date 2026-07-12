@@ -7,6 +7,7 @@ final class AppState: ObservableObject {
 
     @Published private(set) var pendingJobs: [PendingJobRecord] = []
     @Published private(set) var persistenceError: String?
+    @Published private(set) var libraryRevision = 0
 
     private let pendingJobStore: PendingJobStore
     private let pendingSubmissionStore: PendingSubmissionStore
@@ -138,7 +139,7 @@ final class AppState: ObservableObject {
                     if recordsByID[trip.jobId] == nil {
                         recordsByID[trip.jobId] = PendingJobRecord(
                             jobID: trip.jobId,
-                            title: trip.title.isEmpty ? nil : trip.title,
+                            title: trip.displayTitle.isEmpty ? nil : trip.displayTitle,
                             createdAt: Self.parseDate(trip.createdAt) ?? Date()
                         )
                     }
@@ -151,6 +152,10 @@ final class AppState: ObservableObject {
         } catch {
             persistenceError = "Pending trips could not be reconciled."
         }
+    }
+
+    func markLibraryChanged() {
+        libraryRevision &+= 1
     }
 
     private static func parseDate(_ value: String) -> Date? {

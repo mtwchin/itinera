@@ -81,6 +81,8 @@ struct JobStatusResponse: Codable, Sendable {
 struct SavedItinerary: Codable, Identifiable, Sendable {
     var jobId: String
     var status: JobState
+    var title: String?
+    var sourcePublicItineraryId: String?
     var city: String?
     var country: String?
     var arrivalDate: String?
@@ -91,7 +93,48 @@ struct SavedItinerary: Codable, Identifiable, Sendable {
 
     var id: String { jobId }
 
-    var title: String {
-        [city, country].compactMap { $0 }.joined(separator: ", ")
+    var displayTitle: String {
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
+        return [city, country].compactMap { $0 }.joined(separator: ", ")
     }
+}
+
+struct PopularItinerarySummary: Codable, Hashable, Identifiable, Sendable {
+    var id: String
+    var title: String
+    var summary: String
+    var city: String
+    var country: String
+    var locationKey: String
+    var durationDays: Int
+    var saveCount: Int
+    var isSaved: Bool
+
+    var locationName: String {
+        [city, country]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+    }
+}
+
+struct PopularItineraryDetail: Codable, Identifiable, Sendable {
+    var id: String
+    var title: String
+    var summary: String
+    var city: String
+    var country: String
+    var locationKey: String
+    var durationDays: Int
+    var saveCount: Int
+    var isSaved: Bool
+    var result: Itinerary
+}
+
+struct SavePopularItineraryResponse: Codable, Sendable {
+    var created: Bool
+    var savedItinerary: SavedItinerary
 }

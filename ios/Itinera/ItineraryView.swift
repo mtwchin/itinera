@@ -8,6 +8,7 @@ struct ItineraryView: View {
 
     @State private var selectedDay = 1
     @State private var selectedActivity: Activity?
+    @State private var isShowingGoogleMapsExport = false
 
     private var day: ItineraryDay? {
         itinerary.itinerary.first { $0.day == selectedDay }
@@ -32,7 +33,7 @@ struct ItineraryView: View {
 
                         HStack(spacing: 8) {
                             ItineraPill(
-                                text: "\(day.activities.count) stops",
+                                text: "\(day.activities.count) \(day.activities.count == 1 ? "stop" : "stops")",
                                 systemImage: "mappin.and.ellipse"
                             )
                             ItineraPill(
@@ -64,6 +65,16 @@ struct ItineraryView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isShowingGoogleMapsExport = true
+                } label: {
+                    Label("Export day to Google Maps", systemImage: "arrow.up.right.square")
+                }
+                .disabled(day == nil)
+            }
+        }
         .onAppear {
             selectedDay = itinerary.itinerary.first?.day ?? 1
         }
@@ -73,6 +84,12 @@ struct ItineraryView: View {
         .sheet(item: $selectedActivity) { activity in
             ActivityDetailSheet(activity: activity)
                 .environment(\.itineraTheme, theme)
+        }
+        .sheet(isPresented: $isShowingGoogleMapsExport) {
+            if let day {
+                GoogleMapsExportSheet(day: day)
+                    .environment(\.itineraTheme, theme)
+            }
         }
     }
 
@@ -179,6 +196,87 @@ struct ItineraryView: View {
                 }
             }
         }
+    }
+}
+
+private struct GoogleMapsExportSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.itineraTheme) private var theme
+
+    let day: ItineraryDay
+
+    private var routeResult: Result<[GoogleMapsRouteSegment], Error> {
+        Result { try GoogleMapsURLBuilder.routeSegments(for: day.activities) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                ItineraBackground()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        ItineraBrandHeader(
+                            eyebrow: "Day \(day.day) · Route export",
+                            title: "Continue in Google Maps.",
+                            message: "Your stops stay in itinerary order. Google Maps may adjust the path for live conditions."
+                        )
+
+                        switch routeResult {
+                        case .success(let routes) where routes.isEmpty:
+                            ItineraStatusBanner(
+                                message: "This day doesn't have any stops to export.",
+                                kind: .warning
+                            )
+                        case .success(let routes):
+                            if routes.count > 1 {
+                                ItineraStatusBanner(
+                                    message: "This day uses \(routes.count) browser-safe routes. Open them in order; each route repeats the handoff stop.",
+                                    kind: .warning
+                                )
+                            }
+
+                            ForEach(routes) { route in
+                                ItineraSurface {
+                                    VStack(alignment: .leading, spacing: 14) {
+                                        ItineraSectionHeading(
+                                            number: routes.count == 1 ? "GOOGLE MAPS" : "ROUTE \(route.index) OF \(route.totalSegments)",
+                                            title: route.activityNames.joined(separator: " → "),
+                                            message: route.activityNames.count == 1
+                                                ? "1 stop"
+                                                : "\(route.activityNames.count) ordered stops"
+                                        )
+
+                                        Link(destination: route.url) {
+                                            Label(route.title, systemImage: "arrow.up.right.square.fill")
+                                        }
+                                        .buttonStyle(ItineraPrimaryButtonStyle())
+                                        .accessibilityHint("Opens Google Maps or google.com")
+                                    }
+                                }
+                            }
+                        case .failure(let error):
+                            ItineraStatusBanner(
+                                message: error.localizedDescription,
+                                kind: .error
+                            )
+                        }
+                    }
+                    .padding(18)
+                    .padding(.bottom, 18)
+                }
+            }
+            .navigationTitle("Google Maps")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

@@ -64,3 +64,31 @@ The API, worker, and outbox dispatcher remain in one repository and one
 versioned domain model. They deploy as separate processes and scale
 independently. Service decomposition and multi-region writes require measured
 bottlenecks and are not Sprint 1 work.
+
+## ADR-006: Curated public catalog and private saved snapshots
+
+**Status:** Accepted
+
+Popular itineraries live in a separate, trusted catalog. User-generated trips
+are private by default and are never promoted, ranked, or exposed as public
+content implicitly; their requests may contain exact accommodation details,
+dates, group information, and free-form preferences.
+
+Popularity is based on aggregate unique saves, with an editorial rank used only
+as a deterministic cold-start tie-breaker. Saving a catalog entry creates an
+owner-scoped, completed snapshot in the existing trip library. This keeps saved
+content stable if the catalog entry changes or is retired and reuses the same
+authorization boundary as generated trips.
+
+## ADR-007: Google Maps export is outbound interoperability
+
+**Status:** Accepted
+
+The app may open a user-selected itinerary route through the documented Google
+Maps universal HTTPS URL format. It does not use Google place search or
+geocoding, persist Google provider content, or render Google data on an Apple
+map, so this does not change ADR-001's provider boundary.
+
+Exports preserve itinerary order and split long routes into browser-safe
+segments. Universal links require no API key and fall back to the browser when
+Google Maps is not installed.

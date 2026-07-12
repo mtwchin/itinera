@@ -31,6 +31,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=itinera:itinera backend ./backend
 COPY --chown=itinera:itinera alembic ./alembic
+COPY --chown=itinera:itinera scripts ./scripts
 COPY --chown=itinera:itinera alembic.ini ./alembic.ini
 
 USER itinera
