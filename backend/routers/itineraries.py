@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,16 +15,25 @@ from backend.cache.redis import get_redis
 from backend.db.models import Itinerary, User
 from backend.db.repo import (
     IdempotencyConflictError,
+    PopularItineraryListing,
     create_or_replay_job,
+    get_popular_itinerary,
     get_itinerary_by_job_for_user,
+    list_popular_itineraries,
+    list_popular_itinerary_locations,
     list_itineraries,
+    save_public_itinerary_for_user,
 )
 from backend.db.session import get_session
 from backend.schemas.itinerary import (
     GenerateItineraryRequest,
     JobAccepted,
     JobStatusResponse,
+    PopularItineraryDetail,
+    PopularItineraryLocation,
+    PopularItinerarySummary,
     SavedItinerary,
+    SavedPublicItineraryResponse,
 )
 
 router = APIRouter(tags=["itineraries"])
@@ -49,7 +58,9 @@ async def _owned_job_or_404(
     row = await get_itinerary_by_job_for_user(session, job_id, user_id)
     if row is None:
         # Deliberately does not reveal whether another user owns this job ID.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found"
+        )
     return row
 
 
@@ -59,6 +70,21 @@ def _status_from_row(row: Itinerary) -> JobStatusResponse:
         status=row.status.value,
         result=row.result,
         error=row.error,
+    )
+
+
+def _popular_summary(listing: PopularItineraryListing) -> PopularItinerarySummary:
+    row = listing.itinerary
+    return PopularItinerarySummary(
+        id=row.id,
+        title=row.title,
+        summary=row.summary,
+        city=row.city,
+        country=row.country,
+        location_key=row.location_key,
+        duration_days=row.duration_days,
+        save_count=listing.save_count,
+        is_saved=listing.is_saved,
     )
 
 
@@ -92,7 +118,9 @@ async def create_itinerary(
         )
     except IdempotencyConflictError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     if not replayed:
         try:
             await enforce_generation_rate_limit(user)
@@ -117,6 +145,106 @@ async def list_saved_itineraries(
 ) -> list[SavedItinerary]:
     rows = await list_itineraries(session, user.id)
     return [SavedItinerary.from_row(row) for row in rows]
+
+
+@router.get(
+    "/popular-itineraries/locations",
+    response_model=list[PopularItineraryLocation],
+)
+async def popular_itinerary_locations(
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[PopularItineraryLocation]:
+    del user  # Authentication is required even though every returned row is public.
+    rows = await list_popular_itinerary_locations(session, limit=limit)
+    return [
+        PopularItineraryLocation(
+            location_key=row.location_key,
+            city=row.city,
+            country=row.country,
+            itinerary_count=row.itinerary_count,
+            total_saves=row.total_saves,
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/popular-itineraries",
+    response_model=list[PopularItinerarySummary],
+)
+async def popular_itineraries(
+    location: str | None = Query(
+        default=None,
+        min_length=3,
+        max_length=260,
+        pattern=r"^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+    ),
+    limit: int = Query(default=20, ge=1, le=50),
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[PopularItinerarySummary]:
+    rows = await list_popular_itineraries(
+        session,
+        location_key=location,
+        user_id=user.id,
+        limit=limit,
+    )
+    return [_popular_summary(row) for row in rows]
+
+
+@router.get(
+    "/popular-itineraries/{public_itinerary_id}",
+    response_model=PopularItineraryDetail,
+)
+async def popular_itinerary_detail(
+    public_itinerary_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PopularItineraryDetail:
+    listing = await get_popular_itinerary(
+        session,
+        public_itinerary_id=public_itinerary_id,
+        user_id=user.id,
+    )
+    if listing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Popular itinerary not found",
+        )
+    summary = _popular_summary(listing)
+    return PopularItineraryDetail(
+        **summary.model_dump(),
+        result=listing.itinerary.result,
+    )
+
+
+@router.put(
+    "/popular-itineraries/{public_itinerary_id}/saved",
+    response_model=SavedPublicItineraryResponse,
+)
+async def save_popular_itinerary(
+    public_itinerary_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SavedPublicItineraryResponse:
+    saved = await save_public_itinerary_for_user(
+        session,
+        public_itinerary_id=public_itinerary_id,
+        user_id=user.id,
+    )
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Popular itinerary not found",
+        )
+    row, created = saved
+    await session.commit()
+    return SavedPublicItineraryResponse(
+        created=created,
+        saved_itinerary=SavedItinerary.from_row(row),
+    )
 
 
 @router.get("/itineraries/{job_id}", response_model=JobStatusResponse)

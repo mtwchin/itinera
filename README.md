@@ -65,7 +65,13 @@ python3.12 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera \
   ./venv/bin/alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera \
+  ./venv/bin/python scripts/seed_public_itineraries.py
 ```
+
+The catalog seed is validated and idempotent. Rerun it after changing
+`backend/data/public_itineraries.json`; stable catalog IDs update existing
+entries instead of duplicating them.
 
 Create a guest session and submit an idempotent generation:
 
@@ -140,6 +146,16 @@ authentication, or persistence behavior. In Debug, choose a direction with
 `ITINERA_THEME=atlas`, `wayfinder`, or `signal`. To inspect the deterministic
 itinerary fixture without a backend, also set
 `ITINERA_DEMO_SCREEN=itinerary`.
+
+The **Popular** tab groups privacy-reviewed catalog itineraries by destination.
+Opening a route loads its full detail on demand; saving it creates a private,
+completed snapshot in **Trips**. User-generated itineraries and their request
+details are never published automatically.
+
+Each itinerary day can also be opened in Google Maps from its export action.
+Itinera uses Google's universal HTTPS Maps URL format, requires no Google API
+key, and splits long days into ordered browser-safe route segments without
+dropping stops.
 
 ## Verification
 

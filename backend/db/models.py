@@ -4,7 +4,19 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,13 +37,21 @@ class JobStatus(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    clerk_user_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    clerk_user_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True
+    )
     device_id: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
     email: Mapped[str | None] = mapped_column(String(320), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
-    itineraries: Mapped[list[Itinerary]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    itineraries: Mapped[list[Itinerary]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     refresh_tokens: Mapped[list[GuestRefreshToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
@@ -46,16 +66,22 @@ class GuestRefreshToken(Base):
 
     __tablename__ = "guest_refresh_tokens"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("guest_refresh_tokens.id", ondelete="SET NULL")
     )
@@ -63,33 +89,102 @@ class GuestRefreshToken(Base):
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
 
 
+class PublicItinerary(Base):
+    """A privacy-reviewed, reusable itinerary in the public catalog."""
+
+    __tablename__ = "public_itineraries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    summary: Mapped[str] = mapped_column(String(500))
+    city: Mapped[str] = mapped_column(String(120))
+    country: Mapped[str] = mapped_column(String(120))
+    location_key: Mapped[str] = mapped_column(String(260), index=True)
+    duration_days: Mapped[int] = mapped_column(Integer)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    editorial_rank: Mapped[int | None] = mapped_column(Integer)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    saved_copies: Mapped[list[Itinerary]] = relationship(
+        back_populates="source_public_itinerary"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "duration_days >= 1 AND duration_days <= 30",
+            name="ck_public_itineraries_duration_days",
+        ),
+        Index(
+            "ix_public_itineraries_active_location",
+            "is_active",
+            "location_key",
+        ),
+    )
+
+
 class Itinerary(Base):
     __tablename__ = "itineraries"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     job_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending, index=True)
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus), default=JobStatus.pending, index=True
+    )
     request: Mapped[dict] = mapped_column(JSONB, nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     result: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
     run_token: Mapped[str | None] = mapped_column(String(64), index=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    source_public_itinerary_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("public_itineraries.id", ondelete="SET NULL"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
 
     user: Mapped[User | None] = relationship(back_populates="itineraries")
-    runs: Mapped[list[AgentRun]] = relationship(back_populates="itinerary", cascade="all, delete-orphan")
+    source_public_itinerary: Mapped[PublicItinerary | None] = relationship(
+        back_populates="saved_copies"
+    )
+    runs: Mapped[list[AgentRun]] = relationship(
+        back_populates="itinerary", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_itineraries_user_created", "user_id", "created_at"),
         UniqueConstraint(
             "user_id", "idempotency_key", name="uq_itineraries_user_idempotency_key"
+        ),
+        UniqueConstraint(
+            "user_id",
+            "source_public_itinerary_id",
+            name="uq_itineraries_user_public_source",
         ),
     )
 
@@ -99,7 +194,9 @@ class OutboxEvent(Base):
 
     __tablename__ = "outbox_events"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     aggregate_id: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -107,30 +204,42 @@ class OutboxEvent(Base):
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
     )
-    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
     __table_args__ = (
-        UniqueConstraint("event_type", "aggregate_id", name="uq_outbox_event_aggregate"),
+        UniqueConstraint(
+            "event_type", "aggregate_id", name="uq_outbox_event_aggregate"
+        ),
     )
 
 
 class PlaceCache(Base):
     __tablename__ = "place_cache"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     cache_key: Mapped[str] = mapped_column(String(256), unique=True, index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     source: Mapped[str] = mapped_column(String(32))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     itinerary_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("itineraries.id", ondelete="CASCADE"), index=True
     )
@@ -140,6 +249,8 @@ class AgentRun(Base):
     input: Mapped[dict | None] = mapped_column(JSONB)
     output: Mapped[dict | None] = mapped_column(JSONB)
     latency_ms: Mapped[int | None] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
     itinerary: Mapped[Itinerary] = relationship(back_populates="runs")

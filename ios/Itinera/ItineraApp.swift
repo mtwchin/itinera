@@ -27,8 +27,14 @@ struct ItineraApp: App {
 }
 
 struct ContentView: View {
+    private enum Tab: Hashable {
+        case plan
+        case popular
+        case trips
+    }
+
     @Environment(\.itineraTheme) private var theme
-    @State private var selectedTab = 0
+    @State private var selectedTab: Tab = .plan
 
     var body: some View {
         #if DEBUG
@@ -43,10 +49,13 @@ struct ContentView: View {
         TabView(selection: $selectedTab) {
             TripFormView()
                 .tabItem { Label("Plan", systemImage: "map.fill") }
-                .tag(0)
-            SavedTripsView(onPlanTrip: { selectedTab = 0 })
+                .tag(Tab.plan)
+            PopularItinerariesView()
+                .tabItem { Label("Popular", systemImage: "flame.fill") }
+                .tag(Tab.popular)
+            SavedTripsView(onPlanTrip: { selectedTab = .plan })
                 .tabItem { Label("Trips", systemImage: "suitcase.fill") }
-                .tag(1)
+                .tag(Tab.trips)
         }
         .toolbarBackground(theme.surface.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)

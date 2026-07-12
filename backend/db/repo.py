@@ -8,6 +8,7 @@ and cannot share the API server's async connection pool.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
@@ -15,13 +16,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from backend.config import get_settings
-from backend.db.models import Itinerary, JobStatus, OutboxEvent
+from backend.db.models import Itinerary, JobStatus, OutboxEvent, PublicItinerary
 
 
 class IdempotencyConflictError(Exception):
@@ -37,6 +38,22 @@ class JobClaim:
     run_token: str | None = None
     result: dict | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class PopularItineraryListing:
+    itinerary: PublicItinerary
+    save_count: int
+    is_saved: bool
+
+
+@dataclass(frozen=True)
+class PopularItineraryLocationListing:
+    location_key: str
+    city: str
+    country: str
+    itinerary_count: int
+    total_saves: int
 
 
 def _utcnow() -> datetime:
@@ -140,9 +157,227 @@ async def get_itinerary_by_job_for_user(
     session: AsyncSession, job_id: str, user_id: uuid.UUID
 ) -> Itinerary | None:
     result = await session.execute(
-        select(Itinerary).where(Itinerary.job_id == job_id, Itinerary.user_id == user_id)
+        select(Itinerary).where(
+            Itinerary.job_id == job_id, Itinerary.user_id == user_id
+        )
     )
     return result.scalar_one_or_none()
+
+
+def _public_save_counts():
+    return (
+        select(
+            Itinerary.source_public_itinerary_id.label("public_itinerary_id"),
+            func.count(Itinerary.id).label("save_count"),
+        )
+        .where(Itinerary.source_public_itinerary_id.is_not(None))
+        .group_by(Itinerary.source_public_itinerary_id)
+        .subquery()
+    )
+
+
+def _user_public_saves(user_id: uuid.UUID):
+    return (
+        select(Itinerary.source_public_itinerary_id.label("public_itinerary_id"))
+        .where(
+            Itinerary.user_id == user_id,
+            Itinerary.source_public_itinerary_id.is_not(None),
+        )
+        .group_by(Itinerary.source_public_itinerary_id)
+        .subquery()
+    )
+
+
+async def list_popular_itinerary_locations(
+    session: AsyncSession, *, limit: int = 20
+) -> list[PopularItineraryLocationListing]:
+    save_counts = _public_save_counts()
+    total_saves = func.coalesce(func.sum(func.coalesce(save_counts.c.save_count, 0)), 0)
+    result = await session.execute(
+        select(
+            PublicItinerary.location_key,
+            PublicItinerary.city,
+            PublicItinerary.country,
+            func.count(PublicItinerary.id),
+            total_saves,
+        )
+        .outerjoin(
+            save_counts,
+            save_counts.c.public_itinerary_id == PublicItinerary.id,
+        )
+        .where(PublicItinerary.is_active.is_(True))
+        .group_by(
+            PublicItinerary.location_key,
+            PublicItinerary.city,
+            PublicItinerary.country,
+        )
+        .order_by(
+            total_saves.desc(),
+            PublicItinerary.country.asc(),
+            PublicItinerary.city.asc(),
+            PublicItinerary.location_key.asc(),
+        )
+        .limit(limit)
+    )
+    return [
+        PopularItineraryLocationListing(
+            location_key=location_key,
+            city=city,
+            country=country,
+            itinerary_count=int(itinerary_count),
+            total_saves=int(location_saves),
+        )
+        for location_key, city, country, itinerary_count, location_saves in result.all()
+    ]
+
+
+async def list_popular_itineraries(
+    session: AsyncSession,
+    *,
+    location_key: str | None,
+    user_id: uuid.UUID,
+    limit: int = 20,
+) -> list[PopularItineraryListing]:
+    save_counts = _public_save_counts()
+    user_saves = _user_public_saves(user_id)
+    save_count = func.coalesce(save_counts.c.save_count, 0)
+    statement = (
+        select(
+            PublicItinerary,
+            save_count,
+            user_saves.c.public_itinerary_id.is_not(None),
+        )
+        .outerjoin(
+            save_counts,
+            save_counts.c.public_itinerary_id == PublicItinerary.id,
+        )
+        .outerjoin(
+            user_saves,
+            user_saves.c.public_itinerary_id == PublicItinerary.id,
+        )
+        .where(
+            PublicItinerary.is_active.is_(True),
+        )
+    )
+    if location_key is not None:
+        statement = statement.where(PublicItinerary.location_key == location_key)
+    statement = statement.order_by(
+        save_count.desc(),
+        PublicItinerary.editorial_rank.asc().nulls_last(),
+        PublicItinerary.published_at.desc(),
+        PublicItinerary.id.asc(),
+    ).limit(limit)
+    result = await session.execute(statement)
+    return [
+        PopularItineraryListing(
+            itinerary=itinerary,
+            save_count=int(row_save_count),
+            is_saved=bool(is_saved),
+        )
+        for itinerary, row_save_count, is_saved in result.all()
+    ]
+
+
+async def get_popular_itinerary(
+    session: AsyncSession,
+    *,
+    public_itinerary_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> PopularItineraryListing | None:
+    save_counts = _public_save_counts()
+    user_saves = _user_public_saves(user_id)
+    result = await session.execute(
+        select(
+            PublicItinerary,
+            func.coalesce(save_counts.c.save_count, 0),
+            user_saves.c.public_itinerary_id.is_not(None),
+        )
+        .outerjoin(
+            save_counts,
+            save_counts.c.public_itinerary_id == PublicItinerary.id,
+        )
+        .outerjoin(
+            user_saves,
+            user_saves.c.public_itinerary_id == PublicItinerary.id,
+        )
+        .where(
+            PublicItinerary.id == public_itinerary_id,
+            PublicItinerary.is_active.is_(True),
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+    itinerary, save_count, is_saved = row
+    return PopularItineraryListing(
+        itinerary=itinerary,
+        save_count=int(save_count),
+        is_saved=bool(is_saved),
+    )
+
+
+async def save_public_itinerary_for_user(
+    session: AsyncSession,
+    *,
+    public_itinerary_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> tuple[Itinerary, bool] | None:
+    """Create an owner-scoped completed snapshot, or replay its prior save."""
+
+    public_row = (
+        await session.execute(
+            select(PublicItinerary).where(
+                PublicItinerary.id == public_itinerary_id,
+                PublicItinerary.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if public_row is None:
+        return None
+
+    existing = (
+        await session.execute(
+            select(Itinerary).where(
+                Itinerary.user_id == user_id,
+                Itinerary.source_public_itinerary_id == public_itinerary_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+
+    request = {
+        "city": public_row.city,
+        "country": public_row.country,
+        "title": public_row.title,
+        "source": "public_catalog",
+    }
+    saved = Itinerary(
+        job_id=uuid.uuid4().hex,
+        user_id=user_id,
+        status=JobStatus.succeeded,
+        request=request,
+        request_hash=canonical_request_hash(request),
+        result=copy.deepcopy(public_row.result),
+        source_public_itinerary_id=public_row.id,
+    )
+    try:
+        async with session.begin_nested():
+            session.add(saved)
+            await session.flush()
+    except IntegrityError:
+        existing = (
+            await session.execute(
+                select(Itinerary).where(
+                    Itinerary.user_id == user_id,
+                    Itinerary.source_public_itinerary_id == public_itinerary_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            raise
+        return existing, False
+    return saved, True
 
 
 def _worker_maker():

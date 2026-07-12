@@ -37,14 +37,20 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     # API and worker deploys may start concurrently. A session-level advisory
-    # lock makes repeated `alembic upgrade head` calls serialize safely.
+    # lock makes repeated `alembic upgrade head` calls serialize safely. The
+    # lock query starts an implicit SQLAlchemy transaction, so commit it before
+    # Alembic opens the migration transaction; otherwise begin_transaction()
+    # joins the implicit transaction and the connection close rolls back the
+    # migrations even though Alembic reports success.
     connection.exec_driver_sql(f"SELECT pg_advisory_lock({MIGRATION_LOCK_ID})")
+    connection.commit()
     try:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
     finally:
         connection.exec_driver_sql(f"SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})")
+        connection.commit()
 
 
 async def run_migrations_online() -> None:

@@ -1,15 +1,31 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
-Address = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
-PreferenceText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)]
+Name = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+]
+Address = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+]
+PreferenceText = Annotated[
+    str, StringConstraints(strip_whitespace=True, max_length=1000)
+]
 HHMM = Annotated[str, StringConstraints(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")]
+LocationKey = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=3,
+        max_length=260,
+        pattern=r"^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+    ),
+]
 
 
 class Coordinates(BaseModel):
@@ -94,12 +110,14 @@ class JobStatusResponse(BaseModel):
 class SavedItinerary(BaseModel):
     job_id: str
     status: Literal["pending", "running", "succeeded", "failed"]
+    title: str | None = None
     city: str | None = None
     country: str | None = None
     arrival_date: date | None = None
     departure_date: date | None = None
     result: Itinerary | None = None
     error: str | None = None
+    source_public_itinerary_id: uuid.UUID | None = None
     created_at: datetime
 
     @classmethod
@@ -108,11 +126,66 @@ class SavedItinerary(BaseModel):
         return cls(
             job_id=row.job_id,
             status=row.status.value,
+            title=req.get("title"),
             city=req.get("city"),
             country=req.get("country"),
             arrival_date=req.get("arrival_date"),
             departure_date=req.get("departure_date"),
             result=row.result,
             error=row.error,
+            source_public_itinerary_id=row.source_public_itinerary_id,
             created_at=row.created_at,
         )
+
+
+class PopularItineraryLocation(BaseModel):
+    location_key: LocationKey
+    city: Name
+    country: Name
+    itinerary_count: int = Field(ge=0)
+    total_saves: int = Field(ge=0)
+
+
+class PopularItinerarySummary(BaseModel):
+    id: uuid.UUID
+    title: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=500)
+    city: Name
+    country: Name
+    location_key: LocationKey
+    duration_days: int = Field(ge=1, le=30)
+    save_count: int = Field(ge=0)
+    is_saved: bool
+
+
+class PopularItineraryDetail(PopularItinerarySummary):
+    result: Itinerary
+
+
+class SavedPublicItineraryResponse(BaseModel):
+    created: bool
+    saved_itinerary: SavedItinerary
+
+
+class PublicItinerarySeed(BaseModel):
+    """Strict input contract for trusted catalog seed/import data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    title: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=500)
+    city: Name
+    country: Name
+    location_key: LocationKey
+    duration_days: int = Field(ge=1, le=30)
+    result: Itinerary
+    is_active: bool = True
+    editorial_rank: int | None = Field(default=None, ge=1)
+    published_at: datetime
+
+    @model_validator(mode="after")
+    def _validate_duration(self) -> "PublicItinerarySeed":
+        if len(self.result.itinerary) != self.duration_days:
+            raise ValueError("duration_days must match the number of itinerary days")
+        return self

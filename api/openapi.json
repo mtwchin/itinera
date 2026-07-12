@@ -387,6 +387,188 @@
         "title": "JobStatusResponse",
         "type": "object"
       },
+      "PopularItineraryDetail": {
+        "properties": {
+          "city": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "City",
+            "type": "string"
+          },
+          "country": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Country",
+            "type": "string"
+          },
+          "duration_days": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Duration Days",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_saved": {
+            "title": "Is Saved",
+            "type": "boolean"
+          },
+          "location_key": {
+            "maxLength": 260,
+            "minLength": 3,
+            "pattern": "^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+            "title": "Location Key",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "save_count": {
+            "minimum": 0.0,
+            "title": "Save Count",
+            "type": "integer"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "city",
+          "country",
+          "location_key",
+          "duration_days",
+          "save_count",
+          "is_saved",
+          "result"
+        ],
+        "title": "PopularItineraryDetail",
+        "type": "object"
+      },
+      "PopularItineraryLocation": {
+        "properties": {
+          "city": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "City",
+            "type": "string"
+          },
+          "country": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Country",
+            "type": "string"
+          },
+          "itinerary_count": {
+            "minimum": 0.0,
+            "title": "Itinerary Count",
+            "type": "integer"
+          },
+          "location_key": {
+            "maxLength": 260,
+            "minLength": 3,
+            "pattern": "^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+            "title": "Location Key",
+            "type": "string"
+          },
+          "total_saves": {
+            "minimum": 0.0,
+            "title": "Total Saves",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "location_key",
+          "city",
+          "country",
+          "itinerary_count",
+          "total_saves"
+        ],
+        "title": "PopularItineraryLocation",
+        "type": "object"
+      },
+      "PopularItinerarySummary": {
+        "properties": {
+          "city": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "City",
+            "type": "string"
+          },
+          "country": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Country",
+            "type": "string"
+          },
+          "duration_days": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Duration Days",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_saved": {
+            "title": "Is Saved",
+            "type": "boolean"
+          },
+          "location_key": {
+            "maxLength": 260,
+            "minLength": 3,
+            "pattern": "^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+            "title": "Location Key",
+            "type": "string"
+          },
+          "save_count": {
+            "minimum": 0.0,
+            "title": "Save Count",
+            "type": "integer"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "city",
+          "country",
+          "location_key",
+          "duration_days",
+          "save_count",
+          "is_saved"
+        ],
+        "title": "PopularItinerarySummary",
+        "type": "object"
+      },
       "RefreshTokenRequest": {
         "properties": {
           "refresh_token": {
@@ -480,6 +662,18 @@
               }
             ]
           },
+          "source_public_itinerary_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Public Itinerary Id"
+          },
           "status": {
             "enum": [
               "pending",
@@ -489,6 +683,17 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
           }
         },
         "required": [
@@ -497,6 +702,23 @@
           "created_at"
         ],
         "title": "SavedItinerary",
+        "type": "object"
+      },
+      "SavedPublicItineraryResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "saved_itinerary": {
+            "$ref": "#/components/schemas/SavedItinerary"
+          }
+        },
+        "required": [
+          "created",
+          "saved_itinerary"
+        ],
+        "title": "SavedPublicItineraryResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -782,6 +1004,229 @@
           }
         ],
         "summary": "Stream Itinerary",
+        "tags": [
+          "itineraries"
+        ]
+      }
+    },
+    "/api/v1/popular-itineraries": {
+      "get": {
+        "operationId": "popular_itineraries_api_v1_popular_itineraries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "location",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 260,
+                  "minLength": 3,
+                  "pattern": "^[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PopularItinerarySummary"
+                  },
+                  "title": "Response Popular Itineraries Api V1 Popular Itineraries Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Popular Itineraries",
+        "tags": [
+          "itineraries"
+        ]
+      }
+    },
+    "/api/v1/popular-itineraries/locations": {
+      "get": {
+        "operationId": "popular_itinerary_locations_api_v1_popular_itineraries_locations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PopularItineraryLocation"
+                  },
+                  "title": "Response Popular Itinerary Locations Api V1 Popular Itineraries Locations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Popular Itinerary Locations",
+        "tags": [
+          "itineraries"
+        ]
+      }
+    },
+    "/api/v1/popular-itineraries/{public_itinerary_id}": {
+      "get": {
+        "operationId": "popular_itinerary_detail_api_v1_popular_itineraries__public_itinerary_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_itinerary_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Public Itinerary Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PopularItineraryDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Popular Itinerary Detail",
+        "tags": [
+          "itineraries"
+        ]
+      }
+    },
+    "/api/v1/popular-itineraries/{public_itinerary_id}/saved": {
+      "put": {
+        "operationId": "save_popular_itinerary_api_v1_popular_itineraries__public_itinerary_id__saved_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_itinerary_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Public Itinerary Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPublicItineraryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Popular Itinerary",
         "tags": [
           "itineraries"
         ]

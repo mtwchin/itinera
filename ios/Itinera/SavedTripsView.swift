@@ -90,7 +90,7 @@ struct SavedTripsView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
-            .task {
+            .task(id: appState.libraryRevision) {
                 await appState.loadPendingJobs()
                 await load()
             }
@@ -136,7 +136,7 @@ struct SavedTripsView: View {
         if let itinerary = trip.result {
             NavigationLink {
                 ItineraryView(itinerary: itinerary)
-                    .navigationTitle(trip.title)
+                    .navigationTitle(trip.displayTitle)
             } label: {
                 label()
             }
@@ -217,7 +217,7 @@ struct TripRow: View {
             .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(trip.title.isEmpty ? "Untitled trip" : trip.title)
+                Text(trip.displayTitle.isEmpty ? "Untitled trip" : trip.displayTitle)
                     .font(.system(.title3, design: .serif, weight: .bold))
                     .foregroundStyle(theme.primaryText)
 
@@ -229,8 +229,14 @@ struct TripRow: View {
 
                 HStack(spacing: 8) {
                     ItineraPill(text: statusText, systemImage: statusIcon, highlighted: trip.status == .succeeded)
+                    if trip.sourcePublicItineraryId != nil {
+                        ItineraPill(text: "Popular pick", systemImage: "flame.fill")
+                    }
                     if let days = trip.result?.itinerary.count {
-                        ItineraPill(text: "\(days) days", systemImage: "map")
+                        ItineraPill(
+                            text: "\(days) \(days == 1 ? "day" : "days")",
+                            systemImage: "map"
+                        )
                     }
                 }
 
