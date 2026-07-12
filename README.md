@@ -25,7 +25,9 @@ SwiftUI app
 - `frontend/` and `app.py` — legacy web prototype; not the canonical API.
 
 Architecture and launch guardrails are recorded in
-`docs/architecture-decisions.md` and `docs/production-readiness.md`.
+`docs/architecture-decisions.md` and `docs/production-readiness.md`. The
+evidence-backed post-Sprint 1 backlog and release sequence are in
+`docs/next-completion-plan.md`.
 
 ## Local backend
 
