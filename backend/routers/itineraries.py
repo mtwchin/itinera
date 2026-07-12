@@ -5,14 +5,20 @@ import json
 import uuid
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth import current_user, enforce_generation_rate_limit
 from backend.cache.redis import get_redis
+from backend.db.models import User
+from backend.db.repo import create_job, get_itinerary_by_job, list_itineraries
+from backend.db.session import get_session
 from backend.schemas.itinerary import (
     GenerateItineraryRequest,
     JobAccepted,
     JobStatusResponse,
+    SavedItinerary,
 )
 from backend.workers.tasks import run_itinerary_pipeline
 
@@ -31,12 +37,23 @@ def _result_key(job_id: str) -> str:
     "/itineraries",
     response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(enforce_generation_rate_limit)],
 )
 async def create_itinerary(
     payload: GenerateItineraryRequest,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JobAccepted:
     job_id = uuid.uuid4().hex
+    await create_job(
+        session,
+        job_id=job_id,
+        user_id=user.id,
+        request=payload.model_dump(mode="json"),
+        idempotency_key=idempotency_key,
+    )
+    await session.commit()
     run_itinerary_pipeline.delay(
         job_id=job_id,
         request=payload.model_dump(mode="json"),
@@ -49,13 +66,33 @@ async def create_itinerary(
     )
 
 
+@router.get("/itineraries", response_model=list[SavedItinerary])
+async def list_saved_itineraries(
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[SavedItinerary]:
+    rows = await list_itineraries(session, user.id)
+    return [SavedItinerary.from_row(row) for row in rows]
+
+
 @router.get("/itineraries/{job_id}", response_model=JobStatusResponse)
-async def get_itinerary(job_id: str) -> JobStatusResponse:
+async def get_itinerary(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> JobStatusResponse:
     raw = await get_redis().get(_result_key(job_id))
-    if not raw:
+    if raw:
+        return JobStatusResponse(**json.loads(raw))
+    # Redis result expired (or worker restarted) — fall back to Postgres.
+    row = await get_itinerary_by_job(session, job_id)
+    if row is None:
         return JobStatusResponse(job_id=job_id, status="pending")
-    payload = json.loads(raw)
-    return JobStatusResponse(**payload)
+    return JobStatusResponse(
+        job_id=job_id,
+        status=row.status.value,
+        result=row.result,
+        error=row.error,
+    )
 
 
 @router.get("/itineraries/{job_id}/stream")

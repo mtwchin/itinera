@@ -1,0 +1,63 @@
+# Render Blueprint — deploys the API, the Celery worker, Postgres, and Redis.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# After the first deploy, set these secrets on both services in the dashboard:
+#   ANTHROPIC_API_KEY, GOOGLE_MAPS_API_KEY, (optional) TIKTOK_API_KEY
+#
+# Everything runs from the same Dockerfile, so moving to AWS/GCP later is a
+# matter of pointing ECS/Cloud Run at the same image.
+
+databases:
+  - name: itinera-db
+    plan: basic-256mb
+
+services:
+  - type: keyvalue
+    name: itinera-redis
+    plan: free
+    ipAllowList: []  # internal connections only
+
+  - type: web
+    name: itinera-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    preDeployCommand: alembic upgrade head
+    dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    envVars: &shared_env
+      - key: ENV
+        value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itinera-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: TIKTOK_API_KEY
+        sync: false
+
+  - type: worker
+    name: itinera-worker
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4
+    envVars: *shared_env

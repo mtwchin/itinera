@@ -1,112 +1,72 @@
 # Itinera
 
-AI-powered travel itinerary builder. Enter a destination and trip details; the app pulls trending TikTok locations, geocodes them via Google Maps, and uses GPT-4o-mini to produce a day-by-day itinerary.
+AI-powered travel itinerary builder. Enter a destination and trip details; the backend pulls trending TikTok locations, geocodes them via Google Maps, and uses Claude to produce a day-by-day itinerary. Ships as a native iOS app (SwiftUI).
 
-## Stack
+## Architecture
 
-**Backend** — Python, Flask, OpenAI API, Google Maps API, TikTok Research API (optional)
+```
+iOS app (SwiftUI)  ──►  FastAPI (POST /api/itineraries → 202 + job id)
+                              │
+                              ├── Celery worker: TikTok trends → geocode → Claude (structured output)
+                              ├── Redis: job results, progress pub/sub (SSE), rate limiting
+                              └── Postgres: users (device-scoped), saved itineraries
+```
 
-**Frontend** — React 19, TypeScript, Vite, @react-google-maps/api
+- **backend/** — FastAPI app, Celery worker, agents/tools pipeline
+- **ios/** — SwiftUI app (XcodeGen project)
+- **frontend/** — legacy React web client (talks to the old Flask app)
+- **app.py** — legacy Flask backend (superseded by `backend/`)
 
-## Setup
+## Backend — local development
 
-### Prerequisites
-
-- Python 3.8+
-- Node.js 18+
-
-### Backend
+Requires Docker.
 
 ```bash
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+cp .env.example .env       # then fill in ANTHROPIC_API_KEY + GOOGLE_MAPS_API_KEY
+docker compose up -d       # postgres, redis, jaeger, api (:8000), worker
+
+# apply migrations
+python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera ./venv/bin/alembic upgrade head
 ```
 
-Create a `.env` file in the project root:
-
-```
-OPENAI_API_KEY=your_openai_api_key
-GOOGLE_MAPS_API_KEY=your_google_maps_api_key
-TIKTOK_API_KEY=your_tiktok_api_key   # optional
-```
-
-Start the server:
+Smoke test:
 
 ```bash
-python app.py
+curl -X POST localhost:8000/api/itineraries \
+  -H 'Content-Type: application/json' -H 'X-Device-Id: my-test-device' \
+  -d '{"city":"Lisbon","country":"Portugal",
+       "accommodation":{"address":"Rua Augusta 1","lat":38.708,"lng":-9.136},
+       "arrival_date":"2026-08-01","departure_date":"2026-08-04","group_size":2}'
+# then poll the returned status_url, or listen on the stream_url (SSE)
 ```
 
-The API runs at `http://localhost:5000`.
+Tests: `./venv/bin/python -m pytest tests/`
 
-### Frontend
+### API keys
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | Itinerary generation (Claude) |
+| `GOOGLE_MAPS_API_KEY` | recommended | Geocoding places (falls back to city center) |
+| `TIKTOK_API_KEY` | no | Real trending data (falls back to simulated) |
+
+### Auth & rate limiting
+
+Clients send a stable `X-Device-Id` header (the iOS app generates and persists one). Itinerary generation is rate-limited per device (default 10/hour, see `RATE_LIMIT_*` env vars). Sign in with Apple can layer onto the same `users` table later.
+
+## iOS app
+
+Requires Xcode 16+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd ios
+xcodegen generate
+open Itinera.xcodeproj
 ```
 
-The dev server runs at `http://localhost:5173`.
+Run on a simulator with the backend running locally (`http://localhost:8000` is the default base URL in `APIClient.swift`; point it at your deployed API for device/TestFlight builds).
 
-## API Keys
+## Deployment (Render)
 
-**OpenAI** — [platform.openai.com](https://platform.openai.com). Requires a key with GPT-4o-mini access.
-
-**Google Maps** — [console.cloud.google.com](https://console.cloud.google.com). Enable Maps JavaScript API, Geocoding API, and Places API. Create an API key under Credentials.
-
-**TikTok** — [developers.tiktok.com](https://developers.tiktok.com). Research API access requires approval. If the key is absent or the request fails, the app falls back to simulated trending data.
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/config` | Returns Google Maps API key for the frontend |
-| POST | `/api/generate-itinerary` | Generates a full itinerary |
-| POST | `/api/refine-itinerary` | Refines an existing itinerary based on feedback |
-| POST | `/api/expand-maps-url` | Expands a shortened Google Maps URL and extracts coordinates |
-| GET | `/reverse_geocode` | Reverse geocodes `lat`/`lng` query params to an address |
-| POST | `/api/search-places` | Searches places via Google Maps Places API |
-
-### POST /api/generate-itinerary
-
-```json
-{
-  "city": "Tokyo",
-  "country": "Japan",
-  "lengthOfStay": 3,
-  "groupSize": 2,
-  "budget": "Medium",
-  "foodPreferences": "Vegetarian",
-  "mustDo": "Visit temples",
-  "wakeUpTime": "08:00",
-  "accommodation": {
-    "address": "Shinjuku, Tokyo",
-    "lat": 35.6938,
-    "lng": 139.7034
-  }
-}
-```
-
-### POST /api/refine-itinerary
-
-```json
-{
-  "currentItinerary": { ... },
-  "userFeedback": "Add more food stops on day 2"
-}
-```
-
-## Docker
-
-```bash
-docker-compose up
-```
-
-Runs the Flask backend. Redis is defined in `docker-compose.yml` but not currently used.
-
-## Tests
-
-```bash
-pytest
-```
+`render.yaml` is a Render Blueprint: API + worker (same Docker image), managed Postgres and Redis, migrations via pre-deploy. Create a new Blueprint in Render pointing at this repo, then set `ANTHROPIC_API_KEY` / `GOOGLE_MAPS_API_KEY` in the dashboard. The whole stack is a single Dockerfile, so migrating to AWS/GCP later means pointing ECS or Cloud Run at the same image.

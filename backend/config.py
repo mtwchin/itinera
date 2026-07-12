@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,12 +23,26 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://itinera:itinera@localhost:5432/itinera"
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def _force_asyncpg_driver(cls, value: str) -> str:
+        # Managed hosts (Render, Railway, Heroku) hand out postgres:// URLs;
+        # SQLAlchemy needs the asyncpg dialect spelled out.
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+asyncpg://", 1)
+        if value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return value
     redis_url: str = Field(default="redis://localhost:6379/0")
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
 
     anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-sonnet-4-6"
+    anthropic_model: str = "claude-opus-4-8"
+
+    rate_limit_generations_per_window: int = 10
+    rate_limit_window_seconds: int = 60 * 60
 
     google_maps_api_key: str | None = None
     tiktok_api_key: str | None = None

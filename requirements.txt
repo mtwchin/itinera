@@ -16,10 +16,11 @@ redis==5.2.1
 celery[redis]==5.4.0
 
 # --- LLM + agents ---
-anthropic==0.42.0
+anthropic>=0.92.0
 
 # --- External APIs ---
 googlemaps==4.10.0
+requests==2.32.3
 
 # --- Observability ---
 loguru==0.7.3

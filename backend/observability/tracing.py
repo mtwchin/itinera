@@ -12,7 +12,17 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from backend.config import Settings
 
 
+_configured = False
+
+
 def configure_tracing(app: FastAPI, settings: Settings) -> None:
+    # Idempotent: the lifespan runs once per app startup, but tests (and
+    # uvicorn --reload) can start the app multiple times in one process.
+    global _configured
+    if _configured:
+        return
+    _configured = True
+
     resource = Resource.create({SERVICE_NAME: settings.otel_service_name})
     provider = TracerProvider(resource=resource)
     exporter = OTLPSpanExporter(endpoint=f"{settings.otel_exporter_otlp_endpoint}/v1/traces")

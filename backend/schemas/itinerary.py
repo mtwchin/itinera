@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -73,3 +73,30 @@ class JobStatusResponse(BaseModel):
     status: Literal["pending", "running", "succeeded", "failed"]
     result: Itinerary | None = None
     error: str | None = None
+
+
+class SavedItinerary(BaseModel):
+    job_id: str
+    status: Literal["pending", "running", "succeeded", "failed"]
+    city: str | None = None
+    country: str | None = None
+    arrival_date: date | None = None
+    departure_date: date | None = None
+    result: Itinerary | None = None
+    error: str | None = None
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row) -> "SavedItinerary":  # row: backend.db.models.Itinerary
+        req = row.request or {}
+        return cls(
+            job_id=row.job_id,
+            status=row.status.value,
+            city=req.get("city"),
+            country=req.get("country"),
+            arrival_date=req.get("arrival_date"),
+            departure_date=req.get("departure_date"),
+            result=row.result,
+            error=row.error,
+            created_at=row.created_at,
+        )

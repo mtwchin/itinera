@@ -12,9 +12,6 @@ from backend.routers import geocode, health, itineraries
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    configure_logging(settings.log_level)
-    configure_tracing(app, settings)
     yield
 
 
@@ -25,6 +22,10 @@ def create_app() -> FastAPI:
         version="2.0.0",
         lifespan=lifespan,
     )
+
+    # Middleware (incl. OTel instrumentation) must be added before startup.
+    configure_logging(settings.log_level)
+    configure_tracing(app, settings)
 
     app.add_middleware(
         CORSMiddleware,
