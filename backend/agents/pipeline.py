@@ -1,4 +1,4 @@
-"""Itinerary generation pipeline: trends -> geocode -> Claude composer.
+"""Itinerary generation pipeline: licensed discovery -> Apple Maps -> composer.
 
 Runs synchronously inside the Celery worker. Emits coarse progress events via
 the provided callback so the API can stream them to clients.
@@ -31,12 +31,32 @@ def run_pipeline(request: dict, progress: ProgressFn = _noop_progress) -> dict:
     """
     settings = get_settings()
     req = GenerateItineraryRequest.model_validate(request)
+    _validate_provider_configuration(settings)
+    allow_fallback = settings.env != "prod"
 
     progress("trends", {"message": f"Finding trending spots in {req.city}"})
-    places = fetch_trending_places(req.city, req.country, settings.tiktok_api_key)
+    places = fetch_trending_places(
+        req.city,
+        req.country,
+        settings.tiktok_api_key,
+        provider=settings.trends_provider,
+        feed_url=settings.trends_feed_url,
+        feed_api_key=settings.trends_feed_api_key,
+        allow_fallback=allow_fallback,
+    )
 
     progress("geocode", {"message": "Locating places on the map"})
-    places = geocode_places(places, req.city, req.country, settings.google_maps_api_key)
+    places = geocode_places(
+        places,
+        req.city,
+        req.country,
+        settings.google_maps_api_key,
+        provider=settings.maps_provider,
+        apple_team_id=settings.apple_maps_team_id,
+        apple_key_id=settings.apple_maps_key_id,
+        apple_private_key=settings.apple_maps_private_key,
+        allow_fallback=allow_fallback,
+    )
 
     progress("compose", {"message": "Composing your itinerary"})
     itinerary = _compose_itinerary(req, places, settings.anthropic_model, settings.anthropic_api_key)
@@ -45,6 +65,31 @@ def run_pipeline(request: dict, progress: ProgressFn = _noop_progress) -> dict:
         "itinerary": itinerary.model_dump(mode="json"),
         "trending_places": places,
     }
+
+
+def _validate_provider_configuration(settings) -> None:
+    """Reject development-only or mixed map providers in production."""
+
+    if settings.env != "prod":
+        return
+    if settings.trends_provider != "http":
+        raise RuntimeError(
+            "Production requires TRENDS_PROVIDER=http backed by a licensed trends feed"
+        )
+    if not settings.trends_feed_url or not settings.trends_feed_url.startswith("https://"):
+        raise RuntimeError("Production requires an HTTPS TRENDS_FEED_URL")
+    if not settings.trends_feed_api_key:
+        raise RuntimeError("Production requires TRENDS_FEED_API_KEY")
+    if settings.maps_provider != "apple":
+        raise RuntimeError("Production requires MAPS_PROVIDER=apple")
+    if not all(
+        (
+            settings.apple_maps_team_id,
+            settings.apple_maps_key_id,
+            settings.apple_maps_private_key,
+        )
+    ):
+        raise RuntimeError("Production requires Apple Maps Server API credentials")
 
 
 def _length_of_stay(arrival: date, departure: date) -> int:
@@ -66,11 +111,11 @@ def _compose_itinerary(
     places_list = "\n".join(
         f"{i + 1}. {p['name']} ({p['type']}) at {p['address']} "
         f"(lat {p['coordinates']['lat']}, lng {p['coordinates']['lng']}) - "
-        f"{p.get('views', 0):,} TikTok views"
+        f"source={p.get('source', 'unknown')}, popularity={p.get('views', 0):,}"
         for i, p in enumerate(places)
     )
 
-    prompt = f"""You are a travel expert creating an itinerary based on trending TikTok locations.
+    prompt = f"""You are a travel expert creating an itinerary from licensed, provenance-tagged place discovery data.
 
 Destination: {req.city}, {req.country}
 Accommodation: {req.accommodation.address} (lat {req.accommodation.lat}, lng {req.accommodation.lng})
@@ -81,14 +126,14 @@ Food preferences: {req.food_preferences or "None specified"}
 Must-do activities: {req.must_do or "None specified"}
 Budget: {req.budget}
 
-Trending places from TikTok (sorted by popularity), with geocoded coordinates:
+Discovered places (sorted by popularity), with provider provenance and geocoded coordinates:
 {places_list}
 
 Create a {days}-day itinerary that:
 1. STARTS each day from the accommodation around {req.wake_up_time} and ENDS each day back there
 2. Groups nearby attractions into geographic clusters to minimize travel time
 3. Plans routes in logical loops/circuits
-4. Balances activity types (culture, food, nature, shopping) and prioritizes higher TikTok engagement
+4. Balances activity types (culture, food, nature, shopping) and prioritizes stronger popularity signals
 5. Includes the must-do activities and food preferences if specified
 6. Uses realistic timing including travel to/from the accommodation
 7. Uses the provided coordinates and addresses for each activity where available

@@ -11,21 +11,44 @@
 		101BD41497CB02287481CE9A /* SavedTripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */; };
 		129C98C2579C2DE6559E4874 /* ItineraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */; };
 		2160DFF33C6BB78A6340857F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EC031A39B61119A20821D41 /* Models.swift */; };
+		24F3DA2639BB1031E8C5F875 /* APIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */; };
+		5509C9200D2AE0EBFA7E7FF3 /* SecureCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */; };
 		614C9D1DAEC7C550A3A5AB76 /* TripFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E87B6096DFB7B5383C31770 /* TripFormView.swift */; };
+		63FED0414A5DE5E0B5CBDDC4 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48680DD2BF380C9F75FF5CF9 /* AppState.swift */; };
 		7718CA28C77239D42DAAACCD /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C58F1204B4D945BE48C7A5A /* APIClient.swift */; };
 		9AF5EC81A475C65CC22C5A37 /* ItineraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */; };
+		9D8626E6494FCED9D4C45F59 /* APIConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */; };
+		BABC3E599DB3AE0975C04DB4 /* PendingJobStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */; };
+		DBD77BC4DA7FC34535493E1D /* PendingJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5DD76B4B3D759834FCFC380A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0E801381335C11FD2D84A208 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9D8F65B43EBCE03D58381E6D;
+			remoteInfo = Itinera;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraApp.swift; sourceTree = "<group>"; };
 		1C4495892D389B1EDD27F5C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2EC031A39B61119A20821D41 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		3E87B6096DFB7B5383C31770 /* TripFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripFormView.swift; sourceTree = "<group>"; };
+		48680DD2BF380C9F75FF5CF9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureCredentials.swift; sourceTree = "<group>"; };
 		7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraryView.swift; sourceTree = "<group>"; };
 		7BD9AAFC4187F152468CA3AA /* Itinera.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Itinera.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C58F1204B4D945BE48C7A5A /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedTripsView.swift; sourceTree = "<group>"; };
 		8F68A0FE3ED6CECFFCB9A84B /* GenerationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationView.swift; sourceTree = "<group>"; };
+		B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfiguration.swift; sourceTree = "<group>"; };
+		C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
+		C3669219467A47234FE62F4E /* ItineraTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ItineraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingJobStore.swift; sourceTree = "<group>"; };
+		FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingJobStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				7BD9AAFC4187F152468CA3AA /* Itinera.app */,
+				C3669219467A47234FE62F4E /* ItineraTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -41,20 +65,34 @@
 			isa = PBXGroup;
 			children = (
 				E5432C1EE482732AFE785311 /* Itinera */,
+				DD642307D16114A8426B617B /* ItineraTests */,
 				A04B7CD36415314D5B3E1031 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		DD642307D16114A8426B617B /* ItineraTests */ = {
+			isa = PBXGroup;
+			children = (
+				C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */,
+				FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */,
+			);
+			path = ItineraTests;
 			sourceTree = "<group>";
 		};
 		E5432C1EE482732AFE785311 /* Itinera */ = {
 			isa = PBXGroup;
 			children = (
 				7C58F1204B4D945BE48C7A5A /* APIClient.swift */,
+				B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */,
+				48680DD2BF380C9F75FF5CF9 /* AppState.swift */,
 				8F68A0FE3ED6CECFFCB9A84B /* GenerationView.swift */,
 				1C4495892D389B1EDD27F5C8 /* Info.plist */,
 				03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */,
 				7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */,
 				2EC031A39B61119A20821D41 /* Models.swift */,
+				DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */,
 				8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */,
+				4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */,
 				3E87B6096DFB7B5383C31770 /* TripFormView.swift */,
 			);
 			path = Itinera;
@@ -67,6 +105,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5389F40F2E6473C313E10519 /* Build configuration list for PBXNativeTarget "Itinera" */;
 			buildPhases = (
+				0AEAB987F369E527F8D73481 /* Validate Production API URL */,
 				ABE540E4305E402D181BF01C /* Sources */,
 			);
 			buildRules = (
@@ -79,6 +118,24 @@
 			productName = Itinera;
 			productReference = 7BD9AAFC4187F152468CA3AA /* Itinera.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A7BAE46697E2E749F67F1D49 /* ItineraTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3AD5B37DCFF42795709CCF71 /* Build configuration list for PBXNativeTarget "ItineraTests" */;
+			buildPhases = (
+				1C58212B07F1909253E797A0 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C5103C24014027E34CE49483 /* PBXTargetDependency */,
+			);
+			name = ItineraTests;
+			packageProductDependencies = (
+			);
+			productName = ItineraTests;
+			productReference = C3669219467A47234FE62F4E /* ItineraTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -106,34 +163,112 @@
 			projectRoot = "";
 			targets = (
 				9D8F65B43EBCE03D58381E6D /* Itinera */,
+				A7BAE46697E2E749F67F1D49 /* ItineraTests */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		0AEAB987F369E527F8D73481 /* Validate Production API URL */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Validate Production API URL";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$CONFIGURATION\" = \"Release\" ]; then\n  case \"${ITINERA_API_BASE_URL:-}\" in\n    https://*) ;;\n    *)\n      echo \"error: Set ITINERA_PRODUCTION_API_BASE_URL to the deployed HTTPS API.\"\n      exit 1\n      ;;\n  esac\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
+		1C58212B07F1909253E797A0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				24F3DA2639BB1031E8C5F875 /* APIClientTests.swift in Sources */,
+				BABC3E599DB3AE0975C04DB4 /* PendingJobStoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		ABE540E4305E402D181BF01C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				7718CA28C77239D42DAAACCD /* APIClient.swift in Sources */,
+				9D8626E6494FCED9D4C45F59 /* APIConfiguration.swift in Sources */,
+				63FED0414A5DE5E0B5CBDDC4 /* AppState.swift in Sources */,
 				0A29C2E47BA444886B1B7187 /* GenerationView.swift in Sources */,
 				129C98C2579C2DE6559E4874 /* ItineraApp.swift in Sources */,
 				9AF5EC81A475C65CC22C5A37 /* ItineraryView.swift in Sources */,
 				2160DFF33C6BB78A6340857F /* Models.swift in Sources */,
+				DBD77BC4DA7FC34535493E1D /* PendingJobStore.swift in Sources */,
 				101BD41497CB02287481CE9A /* SavedTripsView.swift in Sources */,
+				5509C9200D2AE0EBFA7E7FF3 /* SecureCredentials.swift in Sources */,
 				614C9D1DAEC7C550A3A5AB76 /* TripFormView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		C5103C24014027E34CE49483 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9D8F65B43EBCE03D58381E6D /* Itinera */;
+			targetProxy = 5DD76B4B3D759834FCFC380A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		05F5FCE49206E30084E4DE6F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.itinera.app.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Itinera.app/Itinera";
+			};
+			name = Release;
+		};
+		3DE8E6D43ABC1C810E526974 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.itinera.app.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Itinera.app/Itinera";
+			};
+			name = Debug;
+		};
 		40B3FCFC01F634F6B6B0C0DC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = Itinera/Info.plist;
+				INFOPLIST_FILE = "Itinera/Info-Debug.plist";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -215,6 +350,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ITINERA_API_BASE_URL = "http://localhost:8000";
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -223,6 +359,7 @@
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.9;
 			};
 			name = Debug;
@@ -274,6 +411,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ITINERA_API_BASE_URL = "$(ITINERA_PRODUCTION_API_BASE_URL)";
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -281,6 +419,7 @@
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.9;
 			};
 			name = Release;
@@ -293,6 +432,15 @@
 			buildConfigurations = (
 				ABE951F9867B30571391C100 /* Debug */,
 				BDD20FF62AC54A053D38E273 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3AD5B37DCFF42795709CCF71 /* Build configuration list for PBXNativeTarget "ItineraTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3DE8E6D43ABC1C810E526974 /* Debug */,
+				05F5FCE49206E30084E4DE6F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

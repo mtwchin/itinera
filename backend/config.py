@@ -43,11 +43,41 @@ class Settings(BaseSettings):
 
     rate_limit_generations_per_window: int = 10
     rate_limit_window_seconds: int = 60 * 60
+    rate_limit_global_generations_per_window: int = 1_000
+    rate_limit_guest_sessions_per_window: int = 20
+    rate_limit_global_guest_sessions_per_window: int = 5_000
+
+    # Guest sessions use short-lived signed access tokens and opaque, rotating
+    # refresh tokens. Production must override the development signing secret.
+    auth_jwt_secret: str = "dev-only-change-this-signing-secret"
+    auth_jwt_issuer: str = "itinera-api"
+    auth_jwt_audience: str = "itinera-ios"
+    auth_access_token_ttl_seconds: int = 15 * 60
+    auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
+    auth_refresh_retry_grace_seconds: int = 30
+
+    # A worker owns a running job until this lease expires. Progress callbacks
+    # renew the lease so a broker redelivery cannot execute the same job twice.
+    itinerary_job_lease_seconds: int = 60 * 60
+    outbox_redispatch_initial_seconds: int = 5 * 60
+    outbox_redispatch_max_seconds: int = 60 * 60
 
     google_maps_api_key: str | None = None
     tiktok_api_key: str | None = None
     tiktok_ms_token: str | None = None
     youtube_api_key: str | None = None
+
+    # Provider selection is explicit so a production deployment cannot
+    # silently present development fixtures as live trend data or mix Google
+    # geocoding content with an Apple map. The HTTP trends feed is an internal,
+    # normalized contract backed by a commercially licensed source.
+    trends_provider: Literal["synthetic", "tiktok_research", "http"] = "synthetic"
+    trends_feed_url: str | None = None
+    trends_feed_api_key: str | None = None
+    maps_provider: Literal["synthetic", "google", "apple"] = "synthetic"
+    apple_maps_team_id: str | None = None
+    apple_maps_key_id: str | None = None
+    apple_maps_private_key: str | None = None
 
     clerk_jwks_url: str | None = None
     clerk_issuer: str | None = None

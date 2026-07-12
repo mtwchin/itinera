@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.env
+.env.*
+.DS_Store
+.pytest_cache
+__pycache__
+*.py[cod]
+venv
+frontend
+public
+ios
+tests
+docs
+api

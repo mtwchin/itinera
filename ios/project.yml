@@ -1,4 +1,7 @@
 name: Itinera
+configs:
+  Debug: debug
+  Release: release
 options:
   bundleIdPrefix: com.itinera
   deploymentTarget:
@@ -6,24 +9,66 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
+    SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+  configs:
+    Debug:
+      ITINERA_API_BASE_URL: "http://localhost:8000"
+    Release:
+      ITINERA_API_BASE_URL: $(ITINERA_PRODUCTION_API_BASE_URL)
 targets:
   Itinera:
     type: application
     platform: iOS
-    sources: [Itinera]
+    sources:
+      - path: Itinera
+        excludes: [Info-Debug.plist]
     info:
       path: Itinera/Info.plist
       properties:
         CFBundleDisplayName: Itinera
+        ItineraAPIBaseURL: $(ITINERA_API_BASE_URL)
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
-        NSAppTransportSecurity:
-          # Allows http://localhost during development; remove for App Store builds.
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+      configs:
+        Debug:
+          INFOPLIST_FILE: Itinera/Info-Debug.plist
+    preBuildScripts:
+      - name: Validate Production API URL
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "$CONFIGURATION" = "Release" ]; then
+            case "${ITINERA_API_BASE_URL:-}" in
+              https://*) ;;
+              *)
+                echo "error: Set ITINERA_PRODUCTION_API_BASE_URL to the deployed HTTPS API."
+                exit 1
+                ;;
+            esac
+          fi
+  ItineraTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ItineraTests]
+    dependencies:
+      - target: Itinera
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Itinera:
+    build:
+      targets:
+        Itinera: all
+        ItineraTests: [test]
+    test:
+      config: Debug
+      targets:
+        - name: ItineraTests

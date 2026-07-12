@@ -1,63 +1,100 @@
 # Itinera
 
-AI-powered travel itinerary builder. Enter a destination and trip details; the backend pulls trending TikTok locations, geocodes them via Google Maps, and uses Claude to produce a day-by-day itinerary. Ships as a native iOS app (SwiftUI).
+Native SwiftUI travel planning backed by a durable asynchronous generation
+pipeline. A traveler enters a destination, dates, accommodation, group, budget,
+and preferences; Itinera returns a provenance-tagged, day-by-day itinerary with
+MapKit-ready locations.
 
 ## Architecture
 
+```text
+SwiftUI app
+  -> FastAPI /api/v1 (guest bearer auth, ownership, idempotency)
+       -> Postgres (users, refresh sessions, jobs, itineraries, outbox)
+       -> Redis (rate limits, terminal cache, foreground progress)
+  -> outbox dispatcher -> Celery queue -> leased generation workers
+       -> licensed normalized trends feed
+       -> Apple Maps Server API
+       -> structured LLM composition
 ```
-iOS app (SwiftUI)  ──►  FastAPI (POST /api/itineraries → 202 + job id)
-                              │
-                              ├── Celery worker: TikTok trends → geocode → Claude (structured output)
-                              ├── Redis: job results, progress pub/sub (SSE), rate limiting
-                              └── Postgres: users (device-scoped), saved itineraries
-```
 
-- **backend/** — FastAPI app, Celery worker, agents/tools pipeline
-- **ios/** — SwiftUI app (XcodeGen project)
-- **frontend/** — legacy React web client (talks to the old Flask app)
-- **app.py** — legacy Flask backend (superseded by `backend/`)
+- `ios/` — iOS 17+ SwiftUI app generated with XcodeGen.
+- `backend/` — FastAPI API, provider adapters, worker, and outbox dispatcher.
+- `alembic/` — PostgreSQL migrations.
+- `api/openapi.json` — committed mobile API contract.
+- `frontend/` and `app.py` — legacy web prototype; not the canonical API.
 
-## Backend — local development
+Architecture and launch guardrails are recorded in
+`docs/architecture-decisions.md` and `docs/production-readiness.md`.
 
-Requires Docker.
+## Local backend
+
+Docker is the simplest way to run Postgres, Redis, Jaeger, the API, the outbox
+dispatcher, and the worker.
 
 ```bash
-cp .env.example .env       # then fill in ANTHROPIC_API_KEY + GOOGLE_MAPS_API_KEY
-docker compose up -d       # postgres, redis, jaeger, api (:8000), worker
+cp .env.example .env
+# Add ANTHROPIC_API_KEY. Synthetic discovery/maps are explicit local defaults.
+docker compose up -d
 
-# apply migrations
-python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt
-DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera ./venv/bin/alembic upgrade head
+python3.12 -m venv venv
+./venv/bin/pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera \
+  ./venv/bin/alembic upgrade head
 ```
 
-Smoke test:
+Create a guest session and submit an idempotent generation:
 
 ```bash
-curl -X POST localhost:8000/api/itineraries \
-  -H 'Content-Type: application/json' -H 'X-Device-Id: my-test-device' \
+AUTH="$(curl -sS -X POST localhost:8000/api/v1/auth/guest)"
+ACCESS_TOKEN="$(printf '%s' "$AUTH" | jq -r .access_token)"
+
+curl -X POST localhost:8000/api/v1/itineraries \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"city":"Lisbon","country":"Portugal",
        "accommodation":{"address":"Rua Augusta 1","lat":38.708,"lng":-9.136},
-       "arrival_date":"2026-08-01","departure_date":"2026-08-04","group_size":2}'
-# then poll the returned status_url, or listen on the stream_url (SSE)
+       "arrival_date":"2026-08-01","departure_date":"2026-08-04",
+       "group_size":2,"wake_up_time":"08:00","budget":"Medium"}'
 ```
 
-Tests: `./venv/bin/python -m pytest tests/`
+The response contains owner-protected status and stream URLs. Repeating the
+same request with the same idempotency key returns the original job; reusing
+the key with a different body returns `409`.
 
-### API keys
+## Provider modes
 
-| Variable | Required | Purpose |
+Provider selection is explicit:
+
+| Environment | Trends | Maps |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | yes | Itinerary generation (Claude) |
-| `GOOGLE_MAPS_API_KEY` | recommended | Geocoding places (falls back to city center) |
-| `TIKTOK_API_KEY` | no | Real trending data (falls back to simulated) |
+| Local/test | `TRENDS_PROVIDER=synthetic` | `MAPS_PROVIDER=synthetic` |
+| Optional legacy development | `tiktok_research` | `google` |
+| Production | `http` licensed feed | `apple` Maps Server API |
 
-### Auth & rate limiting
+Synthetic results carry `source=synthetic` and are deterministic development
+fixtures. Production configuration is rejected by the generation pipeline
+unless it uses an HTTPS normalized trends feed and complete Apple Maps Server
+credentials. TikTok Research and Google geocoding are not production paths.
 
-Clients send a stable `X-Device-Id` header (the iOS app generates and persists one). Itinerary generation is rate-limited per device (default 10/hour, see `RATE_LIMIT_*` env vars). Sign in with Apple can layer onto the same `users` table later.
+Required production values:
+
+- `AUTH_JWT_SECRET` — random value of at least 32 bytes.
+- `ANTHROPIC_API_KEY` and the selected `ANTHROPIC_MODEL`.
+- `TRENDS_FEED_URL` and `TRENDS_FEED_API_KEY`.
+- `APPLE_MAPS_TEAM_ID`, `APPLE_MAPS_KEY_ID`, and `APPLE_MAPS_PRIVATE_KEY`.
+
+The normalized trends endpoint accepts a bearer-authenticated POST body of
+`{"city": ..., "country": ..., "limit": ...}` and returns either a `places`
+array or a top-level array. Each place supplies at least `name`, with optional
+`type`, `description`, `source`, `source_url`, `views`, and `engagement`.
 
 ## iOS app
 
-Requires Xcode 16+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+The app uses SwiftUI, an actor-based API client, Keychain credentials, strict
+concurrency checking, atomic pending-job persistence, and bounded polling that
+survives relaunches.
 
 ```bash
 cd ios
@@ -65,8 +102,28 @@ xcodegen generate
 open Itinera.xcodeproj
 ```
 
-Run on a simulator with the backend running locally (`http://localhost:8000` is the default base URL in `APIClient.swift`; point it at your deployed API for device/TestFlight builds).
+Debug defaults to `http://localhost:8000`; override it with the
+`ITINERA_API_BASE_URL` scheme environment variable. Release builds require an
+HTTPS `ITINERA_PRODUCTION_API_BASE_URL`; the build fails when it is missing.
 
-## Deployment (Render)
+## Verification
 
-`render.yaml` is a Render Blueprint: API + worker (same Docker image), managed Postgres and Redis, migrations via pre-deploy. Create a new Blueprint in Render pointing at this repo, then set `ANTHROPIC_API_KEY` / `GOOGLE_MAPS_API_KEY` in the dashboard. The whole stack is a single Dockerfile, so migrating to AWS/GCP later means pointing ECS or Cloud Run at the same image.
+```bash
+./venv/bin/ruff check backend tests scripts
+./venv/bin/python -m pytest tests -q
+python scripts/export_openapi.py --check
+
+cd ios
+xcodegen generate
+```
+
+GitHub Actions runs these backend checks and builds/tests the shared `Itinera`
+scheme on an available iPhone simulator. Regenerate the contract after an API
+change with `python scripts/export_openapi.py`.
+
+## Deployment
+
+`render.yaml` is a beta blueprint for the API, worker, outbox dispatcher,
+Postgres, and Redis. It runs migrations before deploying the API. The container
+and process boundaries remain portable to a managed container platform and a
+dedicated durable queue as traffic grows.

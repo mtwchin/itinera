@@ -1,36 +1,51 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+Address = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+PreferenceText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)]
+HHMM = Annotated[str, StringConstraints(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")]
 
 
 class Coordinates(BaseModel):
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 
 class Accommodation(BaseModel):
-    address: str
-    lat: float
-    lng: float
+    address: Address
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 
 Budget = Literal["Low", "Medium", "High"]
 
 
 class GenerateItineraryRequest(BaseModel):
-    city: str
-    country: str
+    city: Name
+    country: Name
     accommodation: Accommodation
     arrival_date: date
     departure_date: date
     group_size: int = Field(ge=1, le=20)
-    wake_up_time: str = "08:00"
-    food_preferences: str | None = None
-    must_do: str | None = None
+    wake_up_time: HHMM = "08:00"
+    food_preferences: PreferenceText | None = None
+    must_do: PreferenceText | None = None
     budget: Budget = "Medium"
+
+    @model_validator(mode="after")
+    def _validate_trip_dates(self) -> "GenerateItineraryRequest":
+        nights = (self.departure_date - self.arrival_date).days
+        if nights <= 0:
+            raise ValueError("departure_date must be after arrival_date")
+        if nights > 30:
+            raise ValueError("trip length cannot exceed 30 days")
+        return self
 
 
 class Activity(BaseModel):
@@ -66,6 +81,7 @@ class JobAccepted(BaseModel):
     job_id: str
     stream_url: str
     status_url: str
+    replayed: bool = False
 
 
 class JobStatusResponse(BaseModel):

@@ -4,10 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from backend.auth import validate_auth_settings
 from backend.config import get_settings
 from backend.observability.logging import configure_logging
 from backend.observability.tracing import configure_tracing
-from backend.routers import geocode, health, itineraries
+from backend.routers import auth as auth_router
+from backend.routers import health, itineraries
 
 
 @asynccontextmanager
@@ -17,9 +19,10 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    validate_auth_settings(settings)
     app = FastAPI(
         title="Itinera API",
-        version="2.0.0",
+        version="1.0.0",
         lifespan=lifespan,
     )
 
@@ -36,8 +39,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    app.include_router(itineraries.router, prefix="/api")
-    app.include_router(geocode.router, prefix="/api")
+    app.include_router(auth_router.router, prefix="/api/v1")
+    app.include_router(itineraries.router, prefix="/api/v1")
 
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 

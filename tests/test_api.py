@@ -1,21 +1,29 @@
-"""Tests for the FastAPI backend: pipeline logic and API endpoints."""
+"""Pipeline and versioned HTTP API tests."""
 
 from __future__ import annotations
 
 import json
-from datetime import date
+from copy import deepcopy
+import uuid
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from redis.exceptions import RedisError
 
-from backend.db.models import User
+from backend.db.models import Itinerary as ItineraryRow
+from backend.db.models import JobStatus, User
+from backend.db.repo import IdempotencyConflictError
 from backend.main import app
 from backend.schemas.itinerary import (
     AccommodationInfo,
     Activity,
     Coordinates,
     Day,
+    GenerateItineraryRequest,
     Itinerary,
 )
 from backend.tools.trends import fetch_trending_places, simulate_trending_places
@@ -61,6 +69,26 @@ def sample_itinerary() -> Itinerary:
     )
 
 
+def itinerary_row(
+    user: User,
+    *,
+    job_id: str = "abc",
+    status: JobStatus = JobStatus.pending,
+) -> ItineraryRow:
+    result = sample_itinerary().model_dump(mode="json") if status == JobStatus.succeeded else None
+    return ItineraryRow(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        job_id=job_id,
+        status=status,
+        request=SAMPLE_REQUEST,
+        request_hash="a" * 64,
+        idempotency_key="idem-123",
+        result=result,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 # --- Pipeline / tools ---
 
 
@@ -90,8 +118,16 @@ def test_pipeline_composes_itinerary_with_mocked_llm():
         pipeline, "get_settings"
     ) as settings:
         settings.return_value = MagicMock(
+            env="test",
             tiktok_api_key=None,
+            trends_provider="synthetic",
+            trends_feed_url=None,
+            trends_feed_api_key=None,
             google_maps_api_key=None,
+            maps_provider="synthetic",
+            apple_maps_team_id=None,
+            apple_maps_key_id=None,
+            apple_maps_private_key=None,
             anthropic_api_key="test-key",
             anthropic_model="claude-opus-4-8",
         )
@@ -100,7 +136,6 @@ def test_pipeline_composes_itinerary_with_mocked_llm():
     assert out["itinerary"]["itinerary"][0]["day"] == 1
     assert len(out["trending_places"]) == 10
     assert events == ["trends", "geocode", "compose"]
-    # The prompt must carry the trip parameters
     prompt = fake_client.messages.parse.call_args.kwargs["messages"][0]["content"]
     assert "Lisbon" in prompt and "3 days" in prompt
 
@@ -110,8 +145,16 @@ def test_pipeline_fails_without_anthropic_key():
 
     with patch.object(pipeline, "get_settings") as settings:
         settings.return_value = MagicMock(
+            env="test",
             tiktok_api_key=None,
+            trends_provider="synthetic",
+            trends_feed_url=None,
+            trends_feed_api_key=None,
             google_maps_api_key=None,
+            maps_provider="synthetic",
+            apple_maps_team_id=None,
+            apple_maps_key_id=None,
+            apple_maps_private_key=None,
             anthropic_api_key=None,
             anthropic_model="claude-opus-4-8",
         )
@@ -126,48 +169,171 @@ def test_length_of_stay():
     assert _length_of_stay(date(2026, 8, 1), date(2026, 8, 1)) == 1
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("city",), "   "),
+        (("city",), "x" * 121),
+        (("country",), "x" * 121),
+        (("accommodation", "address"), "x" * 501),
+        (("accommodation", "lat"), 90.01),
+        (("accommodation", "lng"), -180.01),
+        (("wake_up_time",), "24:00"),
+        (("food_preferences",), "x" * 1001),
+        (("must_do",), "x" * 1001),
+        (("departure_date",), "2026-08-01"),
+        (("departure_date",), "2026-09-01"),
+    ],
+)
+def test_generation_request_rejects_unbounded_or_invalid_input(path, value):
+    payload = deepcopy(SAMPLE_REQUEST)
+    target = payload
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = value
+    with pytest.raises(ValidationError):
+        GenerateItineraryRequest.model_validate(payload)
+
+
+def test_generation_request_allows_thirty_day_trip_and_coordinate_edges():
+    payload = deepcopy(SAMPLE_REQUEST)
+    payload["departure_date"] = "2026-08-31"
+    payload["accommodation"]["lat"] = 90
+    payload["accommodation"]["lng"] = -180
+    assert GenerateItineraryRequest.model_validate(payload).city == "Lisbon"
+
+
 # --- API endpoints ---
 
 
 @pytest.fixture
-def client():
-    from backend.auth import current_user, enforce_generation_rate_limit
+def authenticated_client():
+    from backend.auth import current_user
     from backend.db.session import get_session
 
     fake_session = AsyncMock()
+    user = User(id=uuid.uuid4())
     app.dependency_overrides[get_session] = lambda: fake_session
-    app.dependency_overrides[current_user] = lambda: User(device_id="test-device")
-    app.dependency_overrides[enforce_generation_rate_limit] = lambda: None
-    with TestClient(app) as c:
-        yield c
+    app.dependency_overrides[current_user] = lambda: user
+    with patch(
+        "backend.routers.itineraries.enforce_generation_rate_limit",
+        new_callable=AsyncMock,
+    ), TestClient(app) as client:
+        yield client, fake_session, user
     app.dependency_overrides.clear()
 
 
-def test_create_itinerary_enqueues_job(client):
-    with patch("backend.routers.itineraries.run_itinerary_pipeline") as task, patch(
-        "backend.routers.itineraries.create_job", new_callable=AsyncMock
-    ) as create_job:
-        resp = client.post("/api/itineraries", json=SAMPLE_REQUEST, headers={"X-Device-Id": "test-device"})
+def test_create_itinerary_writes_transactional_job(authenticated_client):
+    client, session, user = authenticated_client
+    row = itinerary_row(user, job_id="new-job")
+    with patch(
+        "backend.routers.itineraries.create_or_replay_job",
+        new_callable=AsyncMock,
+        return_value=(row, False),
+    ) as create, patch(
+        "backend.routers.itineraries.enforce_generation_rate_limit",
+        new_callable=AsyncMock,
+    ) as rate_limit:
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "request-123"},
+        )
 
-    assert resp.status_code == 202
-    body = resp.json()
-    assert body["stream_url"].endswith("/stream")
-    task.delay.assert_called_once()
-    create_job.assert_awaited_once()
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "new-job",
+        "stream_url": "/api/v1/itineraries/new-job/stream",
+        "status_url": "/api/v1/itineraries/new-job",
+        "replayed": False,
+    }
+    assert create.await_args.kwargs["user_id"] == user.id
+    assert create.await_args.kwargs["idempotency_key"] == "request-123"
+    rate_limit.assert_awaited_once_with(user)
+    session.commit.assert_awaited_once()
 
 
-def test_create_itinerary_requires_device_header():
-    with TestClient(app) as c:
-        resp = c.post("/api/itineraries", json=SAMPLE_REQUEST)
-    assert resp.status_code == 422  # missing X-Device-Id
+def test_create_itinerary_replays_same_job(authenticated_client):
+    client, _, user = authenticated_client
+    row = itinerary_row(user, job_id="original-job")
+    with patch(
+        "backend.routers.itineraries.create_or_replay_job",
+        new_callable=AsyncMock,
+        return_value=(row, True),
+    ), patch(
+        "backend.routers.itineraries.enforce_generation_rate_limit",
+        new_callable=AsyncMock,
+    ) as rate_limit:
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "request-123"},
+        )
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "original-job"
+    assert response.json()["replayed"] is True
+    rate_limit.assert_not_awaited()
 
 
-def test_create_itinerary_validates_payload(client):
-    resp = client.post("/api/itineraries", json={"city": "Lisbon"}, headers={"X-Device-Id": "d" * 12})
-    assert resp.status_code == 422
+def test_create_itinerary_rejects_idempotency_body_mismatch(authenticated_client):
+    client, session, _ = authenticated_client
+    with patch(
+        "backend.routers.itineraries.create_or_replay_job",
+        new_callable=AsyncMock,
+        side_effect=IdempotencyConflictError("different request body"),
+    ):
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "request-123"},
+        )
+    assert response.status_code == 409
+    session.rollback.assert_awaited_once()
 
 
-def test_get_status_from_redis(client):
+def test_create_itinerary_requires_idempotency_key(authenticated_client):
+    client, _, _ = authenticated_client
+    response = client.post("/api/v1/itineraries", json=SAMPLE_REQUEST)
+    assert response.status_code == 422
+
+
+def test_new_job_is_rolled_back_when_admission_limit_is_reached(authenticated_client):
+    client, session, user = authenticated_client
+    row = itinerary_row(user, job_id="limited-job")
+    with patch(
+        "backend.routers.itineraries.create_or_replay_job",
+        new_callable=AsyncMock,
+        return_value=(row, False),
+    ), patch(
+        "backend.routers.itineraries.enforce_generation_rate_limit",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(status_code=429, detail="limited"),
+    ):
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "request-limited"},
+        )
+
+    assert response.status_code == 429
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_awaited()
+
+
+def test_create_itinerary_requires_bearer_token():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "request-123", "X-Device-Id": "attacker-choice"},
+        )
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_status_authorizes_owner_before_reading_redis(authenticated_client):
+    client, session, user = authenticated_client
+    row = itinerary_row(user, status=JobStatus.succeeded)
     result = {
         "job_id": "abc",
         "status": "succeeded",
@@ -176,23 +342,79 @@ def test_get_status_from_redis(client):
     }
     fake_redis = MagicMock()
     fake_redis.get = AsyncMock(return_value=json.dumps(result))
-    with patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
-        resp = client.get("/api/itineraries/abc")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "succeeded"
+    with patch(
+        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        new_callable=AsyncMock,
+        return_value=row,
+    ) as lookup, patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
+        response = client.get("/api/v1/itineraries/abc")
+    assert response.status_code == 200
+    assert response.json()["status"] == "succeeded"
+    lookup.assert_awaited_once_with(session, "abc", user.id)
 
 
-def test_get_status_falls_back_to_db(client):
+def test_status_hides_another_users_job_without_touching_cache(authenticated_client):
+    client, _, _ = authenticated_client
+    redis_factory = MagicMock()
+    with patch(
+        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch("backend.routers.itineraries.get_redis", redis_factory):
+        response = client.get("/api/v1/itineraries/not-mine")
+    assert response.status_code == 404
+    redis_factory.assert_not_called()
+
+
+def test_status_falls_back_to_postgres_when_redis_is_unavailable(authenticated_client):
+    client, _, user = authenticated_client
+    row = itinerary_row(user, status=JobStatus.succeeded)
     fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(return_value=None)
-    with patch("backend.routers.itineraries.get_redis", return_value=fake_redis), patch(
-        "backend.routers.itineraries.get_itinerary_by_job", new_callable=AsyncMock, return_value=None
+    fake_redis.get = AsyncMock(side_effect=RedisError("cache unavailable"))
+    with patch(
+        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        new_callable=AsyncMock,
+        return_value=row,
+    ), patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
+        response = client.get("/api/v1/itineraries/abc")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "succeeded"
+
+
+def test_list_is_scoped_to_current_user(authenticated_client):
+    client, session, user = authenticated_client
+    row = itinerary_row(user)
+    with patch(
+        "backend.routers.itineraries.list_itineraries",
+        new_callable=AsyncMock,
+        return_value=[row],
+    ) as listing:
+        response = client.get("/api/v1/itineraries")
+    assert response.status_code == 200
+    assert response.json()[0]["job_id"] == "abc"
+    listing.assert_awaited_once_with(session, user.id)
+
+
+def test_terminal_stream_is_owner_scoped_and_immediate(authenticated_client):
+    client, _, user = authenticated_client
+    row = itinerary_row(user, status=JobStatus.succeeded)
+    with patch(
+        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        new_callable=AsyncMock,
+        return_value=row,
     ):
-        resp = client.get("/api/itineraries/unknown")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "pending"
+        response = client.get("/api/v1/itineraries/abc/stream")
+    assert response.status_code == 200
+    assert "event: result" in response.text
+    assert '"status": "succeeded"' in response.text
+
+
+def test_unversioned_itinerary_route_is_not_exposed(authenticated_client):
+    client, _, _ = authenticated_client
+    assert client.get("/api/itineraries").status_code == 404
 
 
 def test_healthz():
-    with TestClient(app) as c:
-        assert c.get("/healthz").json() == {"status": "ok"}
+    with TestClient(app) as client:
+        assert client.get("/healthz").json() == {"status": "ok"}

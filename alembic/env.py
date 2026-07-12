@@ -20,6 +20,7 @@ if config.config_file_name is not None:
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 target_metadata = Base.metadata
+MIGRATION_LOCK_ID = 4_869_114_346_782_001
 
 
 def run_migrations_offline() -> None:
@@ -35,9 +36,15 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
-    with context.begin_transaction():
-        context.run_migrations()
+    # API and worker deploys may start concurrently. A session-level advisory
+    # lock makes repeated `alembic upgrade head` calls serialize safely.
+    connection.exec_driver_sql(f"SELECT pg_advisory_lock({MIGRATION_LOCK_ID})")
+    try:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+    finally:
+        connection.exec_driver_sql(f"SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})")
 
 
 async def run_migrations_online() -> None:
