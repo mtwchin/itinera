@@ -100,14 +100,13 @@ struct PendingSubmissionRecord: Codable, Equatable, Identifiable, Sendable {
 
 actor PendingSubmissionStore {
     private let fileURL: URL
-    private let fileManager: FileManager
+    private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedRecords: [PendingSubmissionRecord]?
 
-    init(fileURL: URL, fileManager: FileManager = .default) {
+    init(fileURL: URL) {
         self.fileURL = fileURL
-        self.fileManager = fileManager
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -115,14 +114,13 @@ actor PendingSubmissionStore {
         decoder.dateDecodingStrategy = .iso8601
     }
 
-    static func live(fileManager: FileManager = .default) -> PendingSubmissionStore {
-        let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+    static func live() -> PendingSubmissionStore {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         return PendingSubmissionStore(
             fileURL: root
                 .appending(path: "Itinera", directoryHint: .isDirectory)
-                .appending(path: "pending-submissions.json"),
-            fileManager: fileManager
+                .appending(path: "pending-submissions.json")
         )
     }
 

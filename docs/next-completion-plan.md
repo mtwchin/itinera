@@ -6,6 +6,28 @@
 
 **Recommended next release target:** internal TestFlight beta
 
+## July 12 Sprint 2 implementation update
+
+The working tree now includes the next core-loop increment:
+
+- local Ollama is the default structured itinerary composer, behind a
+  provider-neutral boundary that keeps a hosted migration possible;
+- destination and home base use explicit Apple Maps search/map selection and
+  confirmation instead of independent free-text city/country fields;
+- trip dates use one range control: the first tap selects arrival, the second
+  selects departure, and a third tap restarts the range;
+- Xcode 26.6 Debug tests pass on an iOS 26.5 simulator (14 tests), the Release
+  simulator build passes with an injected HTTPS API URL, and XcodeGen output is
+  deterministic in the current worktree;
+- backend lint, OpenAPI drift, configuration parsing, and 74 tests pass.
+
+This closes the stale-coordinate/map-selection portion of NXT-006 and the
+simulator-build portion of NXT-001. It does not close either ticket: physical
+device/CI evidence, semantic grounding validation, a seven-day beta decision,
+and deterministic UI tests are still outstanding. Local Ollama also is not the
+scale target; production inference capacity, quality, retries, observability,
+and cost ceilings remain release-gated work.
+
 ## Executive decision
 
 Sprint 1 established a credible foundation: server-issued guest identity,
@@ -374,9 +396,8 @@ rate-limit value.
 - Add asymmetric JWT signing with `kid` rotation.
 - Introduce provider-specific/priority queues and regional read replicas only
   when queue and database metrics justify them.
-- Remove or archive the legacy Flask, static, and React prototypes plus the
-  obsolete API-key tester so they cannot drift, expose obsolete integrations,
-  or confuse the production path.
+- Keep the repository native-only so obsolete browser clients cannot drift,
+  expose old integrations, or confuse the production path.
 - Keep the modular monolith; do not split services or add multi-region writes
   without measured need.
 

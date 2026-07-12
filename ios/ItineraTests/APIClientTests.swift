@@ -60,7 +60,7 @@ final class APIClientTests: XCTestCase {
 
         let accepted = try await client.createItinerary(sampleRequest, idempotencyKey: idempotencyKey)
         XCTAssertEqual(accepted.jobId, "job-123")
-        let stored = try await credentialStore.loadCredentials()
+        let stored = await credentialStore.loadCredentials()
         XCTAssertEqual(stored?.refreshToken, "refresh-1")
     }
 
@@ -119,7 +119,7 @@ final class APIClientTests: XCTestCase {
         XCTAssertTrue(trips.isEmpty)
         XCTAssertEqual(itineraryRequests, 2)
         XCTAssertEqual(refreshRequests, 1)
-        let stored = try await credentialStore.loadCredentials()
+        let stored = await credentialStore.loadCredentials()
         XCTAssertEqual(stored?.accessToken, "new-access")
         XCTAssertEqual(stored?.refreshToken, "refresh-2")
     }
@@ -225,7 +225,7 @@ final class APIClientTests: XCTestCase {
 
         let trips = try await client.savedItineraries()
         XCTAssertTrue(trips.isEmpty)
-        let stored = try await credentialStore.loadCredentials()
+        let stored = await credentialStore.loadCredentials()
         XCTAssertEqual(stored?.refreshToken, "guest-refresh")
     }
 
@@ -241,6 +241,7 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(policy.delay(forAttempt: 0, randomUnit: 0), 0.8, accuracy: 0.0001)
         XCTAssertEqual(policy.delay(forAttempt: 2, randomUnit: 0.5), 4, accuracy: 0.0001)
         XCTAssertEqual(policy.delay(forAttempt: 20, randomUnit: 1), 6, accuracy: 0.0001)
+        XCTAssertEqual(JobPollingPolicy().timeout, 10 * 60)
     }
 
     private func makeClient(credentialStore: MemoryCredentialStore) -> APIClient {

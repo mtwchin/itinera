@@ -15,14 +15,17 @@ SwiftUI app
   -> outbox dispatcher -> Celery queue -> leased generation workers
        -> licensed normalized trends feed
        -> Apple Maps Server API
-       -> structured LLM composition
+       -> swappable structured composer (local Ollama by default)
 ```
 
 - `ios/` — iOS 17+ SwiftUI app generated with XcodeGen.
 - `backend/` — FastAPI API, provider adapters, worker, and outbox dispatcher.
 - `alembic/` — PostgreSQL migrations.
 - `api/openapi.json` — committed mobile API contract.
-- `frontend/` and `app.py` — legacy web prototype; not the canonical API.
+
+The repository has one product client: the native iOS app. The API and worker
+topology exist solely to support that client; the former React, static, and
+Flask prototypes have been removed.
 
 Architecture and launch guardrails are recorded in
 `docs/architecture-decisions.md` and `docs/production-readiness.md`. The
@@ -34,9 +37,28 @@ evidence-backed post-Sprint 1 backlog and release sequence are in
 Docker is the simplest way to run Postgres, Redis, Jaeger, the API, the outbox
 dispatcher, and the worker.
 
+Itinerary composition defaults to local Ollama, so development does not need a
+personal cloud-model key. Install/start Ollama on the host and pull the model
+once:
+
+```bash
+ollama pull qwen2.5:7b-instruct
+ollama serve  # run in another terminal; omit when the Ollama app is already running
+```
+
+Ollama serves its local API on port `11434`. The Compose worker reaches that
+host process through `host.docker.internal`; do not expose the unauthenticated
+local Ollama port to the public internet.
+
+This Ollama setup is a zero-cloud-cost development path, not the production
+scale target. The worker calls a provider-neutral composer boundary, so a later
+move to a private GPU pool or hosted inference endpoint does not change the iOS
+or HTTP API contracts. Before a public beta, load-test the selected inference
+deployment, add bounded retries and quality/grounding checks, and scale workers
+against measured generation latency.
+
 ```bash
 cp .env.example .env
-# Add ANTHROPIC_API_KEY. Synthetic discovery/maps are explicit local defaults.
 docker compose up -d
 
 python3.12 -m venv venv
@@ -67,13 +89,15 @@ the key with a different body returns `409`.
 
 ## Provider modes
 
-Provider selection is explicit:
+Provider selection is explicit. Discovery/maps and itinerary composition are
+independent, so the local composer can be replaced later without changing the
+mobile API:
 
-| Environment | Trends | Maps |
-|---|---|---|
-| Local/test | `TRENDS_PROVIDER=synthetic` | `MAPS_PROVIDER=synthetic` |
-| Optional legacy development | `tiktok_research` | `google` |
-| Production | `http` licensed feed | `apple` Maps Server API |
+| Environment | Trends | Maps | Composer |
+|---|---|---|---|
+| Local/test | `synthetic` | `synthetic` | `ollama` |
+| Optional hosted development | `synthetic` | `synthetic` | `anthropic` |
+| Production | `http` licensed feed | `apple` Maps Server API | explicitly selected deployment provider |
 
 Synthetic results carry `source=synthetic` and are deterministic development
 fixtures. Production configuration is rejected by the generation pipeline
@@ -83,7 +107,9 @@ credentials. TikTok Research and Google geocoding are not production paths.
 Required production values:
 
 - `AUTH_JWT_SECRET` — random value of at least 32 bytes.
-- `ANTHROPIC_API_KEY` and the selected `ANTHROPIC_MODEL`.
+- Composer configuration: `OLLAMA_BASE_URL`/`OLLAMA_MODEL` and optional
+  `OLLAMA_API_KEY`, or a project-owned `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`
+  when `anthropic` is explicitly selected.
 - `TRENDS_FEED_URL` and `TRENDS_FEED_API_KEY`.
 - `APPLE_MAPS_TEAM_ID`, `APPLE_MAPS_KEY_ID`, and `APPLE_MAPS_PRIVATE_KEY`.
 
@@ -107,6 +133,13 @@ open Itinera.xcodeproj
 Debug defaults to `http://localhost:8000`; override it with the
 `ITINERA_API_BASE_URL` scheme environment variable. Release builds require an
 HTTPS `ITINERA_PRODUCTION_API_BASE_URL`; the build fails when it is missing.
+
+The default visual direction is **Atlas Field Notes**. UI presentation is
+isolated behind semantic theme tokens so visual experiments do not touch API,
+authentication, or persistence behavior. In Debug, choose a direction with
+`ITINERA_THEME=atlas`, `wayfinder`, or `signal`. To inspect the deterministic
+itinerary fixture without a backend, also set
+`ITINERA_DEMO_SCREEN=itinerary`.
 
 ## Verification
 
