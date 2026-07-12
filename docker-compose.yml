@@ -55,7 +55,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://itinera:itinera@postgres:5432/itinera
       REDIS_URL: redis://redis:6379/0
@@ -90,7 +91,8 @@ services:
     build: .
     command: ["celery", "-A", "backend.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=4"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://itinera:itinera@postgres:5432/itinera
       REDIS_URL: redis://redis:6379/0
@@ -117,7 +119,8 @@ services:
     build: .
     command: ["python", "-m", "backend.workers.outbox_dispatcher"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://itinera:itinera@postgres:5432/itinera
       REDIS_URL: redis://redis:6379/0
