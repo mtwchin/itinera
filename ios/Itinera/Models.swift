@@ -3,18 +3,18 @@ import Foundation
 // Mirrors backend/schemas/itinerary.py. The API uses snake_case; we decode
 // with .convertFromSnakeCase so property names are camelCase here.
 
-struct Coordinates: Codable, Hashable {
+struct Coordinates: Codable, Hashable, Sendable {
     var lat: Double
     var lng: Double
 }
 
-struct Accommodation: Codable, Hashable {
+struct Accommodation: Codable, Hashable, Sendable {
     var address: String
     var lat: Double
     var lng: Double
 }
 
-struct GenerateItineraryRequest: Codable {
+struct GenerateItineraryRequest: Codable, Equatable, Sendable {
     var city: String
     var country: String
     var accommodation: Accommodation
@@ -27,7 +27,7 @@ struct GenerateItineraryRequest: Codable {
     var budget: String
 }
 
-struct Activity: Codable, Hashable, Identifiable {
+struct Activity: Codable, Hashable, Identifiable, Sendable {
     var time: String
     var name: String
     var type: String
@@ -39,7 +39,7 @@ struct Activity: Codable, Hashable, Identifiable {
     var id: String { "\(time)-\(name)" }
 }
 
-struct ItineraryDay: Codable, Hashable, Identifiable {
+struct ItineraryDay: Codable, Hashable, Identifiable, Sendable {
     var day: Int
     var theme: String
     var activities: [Activity]
@@ -47,37 +47,38 @@ struct ItineraryDay: Codable, Hashable, Identifiable {
     var id: Int { day }
 }
 
-struct AccommodationInfo: Codable, Hashable {
+struct AccommodationInfo: Codable, Hashable, Sendable {
     var morningStart: String
     var eveningReturn: String
     var transportationTips: String
 }
 
-struct Itinerary: Codable, Hashable {
+struct Itinerary: Codable, Hashable, Sendable {
     var itinerary: [ItineraryDay]
     var tips: [String]
     var accommodationInfo: AccommodationInfo
     var estimatedBudget: String
 }
 
-struct JobAccepted: Codable {
+struct JobAccepted: Codable, Sendable {
     var jobId: String
     var streamUrl: String
     var statusUrl: String
+    var replayed: Bool?
 }
 
-enum JobState: String, Codable {
+enum JobState: String, Codable, Sendable {
     case pending, running, succeeded, failed
 }
 
-struct JobStatusResponse: Codable {
+struct JobStatusResponse: Codable, Sendable {
     var jobId: String
     var status: JobState
     var result: Itinerary?
     var error: String?
 }
 
-struct SavedItinerary: Codable, Identifiable {
+struct SavedItinerary: Codable, Identifiable, Sendable {
     var jobId: String
     var status: JobState
     var city: String?

@@ -1,8 +1,9 @@
-# Render Blueprint — deploys the API, the Celery worker, Postgres, and Redis.
+# Render Blueprint — deploys the API, outbox dispatcher, Celery worker,
+# Postgres, and Redis.
 # Docs: https://render.com/docs/blueprint-spec
 #
-# After the first deploy, set these secrets on both services in the dashboard:
-#   ANTHROPIC_API_KEY, GOOGLE_MAPS_API_KEY, (optional) TIKTOK_API_KEY
+# Before production generation, set AUTH_JWT_SECRET, ANTHROPIC_API_KEY,
+# TRENDS_FEED_URL / TRENDS_FEED_API_KEY, and the Apple Maps credentials.
 #
 # Everything runs from the same Dockerfile, so moving to AWS/GCP later is a
 # matter of pointing ECS/Cloud Run at the same image.
@@ -24,7 +25,7 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     preDeployCommand: alembic upgrade head
-    dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
     envVars: &shared_env
       - key: ENV
         value: prod
@@ -49,9 +50,21 @@ services:
           property: connectionString
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: GOOGLE_MAPS_API_KEY
+      - key: AUTH_JWT_SECRET
         sync: false
-      - key: TIKTOK_API_KEY
+      - key: TRENDS_PROVIDER
+        value: http
+      - key: TRENDS_FEED_URL
+        sync: false
+      - key: TRENDS_FEED_API_KEY
+        sync: false
+      - key: MAPS_PROVIDER
+        value: apple
+      - key: APPLE_MAPS_TEAM_ID
+        sync: false
+      - key: APPLE_MAPS_KEY_ID
+        sync: false
+      - key: APPLE_MAPS_PRIVATE_KEY
         sync: false
 
   - type: worker
@@ -59,5 +72,15 @@ services:
     runtime: docker
     plan: starter
     dockerfilePath: ./Dockerfile
+    preDeployCommand: alembic upgrade head
     dockerCommand: celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4
+    envVars: *shared_env
+
+  - type: worker
+    name: itinera-outbox
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    preDeployCommand: alembic upgrade head
+    dockerCommand: python -m backend.workers.outbox_dispatcher
     envVars: *shared_env

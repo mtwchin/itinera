@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-lint-test:
+    name: Backend lint, test, and API contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ENV: test
+      OTEL_SDK_DISABLED: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Lint backend and automation
+        run: python -m ruff check backend tests scripts
+
+      - name: Run backend tests
+        run: python -m pytest
+
+      - name: Validate migrations and local topology
+        env:
+          DATABASE_URL: postgresql+asyncpg://itinera:itinera@localhost:5432/itinera
+        run: |
+          python -m alembic upgrade head --sql > /dev/null
+          docker compose config --quiet
+
+      - name: Verify OpenAPI contract
+        run: python scripts/export_openapi.py --check
+
+  ios-build-test:
+    name: iOS build and test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      XCODEGEN_VERSION: 2.45.4
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "$archive"
+          ditto -x -k "$archive" "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+
+      - name: Regenerate project and verify no drift
+        working-directory: ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          drift="$(git status --porcelain -- .)"
+          if [[ -n "$drift" ]]; then
+            echo "::error::The generated Xcode project differs from the committed project."
+            git diff -- .
+            printf '%s\n' "$drift"
+            exit 1
+          fi
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          inventory = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
+          candidates = []
+          for runtime, devices in inventory.get("devices", {}).items():
+              match = re.search(r"SimRuntime\.iOS-([0-9-]+)$", runtime)
+              if not match:
+                  continue
+              version = tuple(int(part) for part in match.group(1).split("-"))
+              for device in devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      candidates.append((version, device["name"], device["udid"]))
+
+          if not candidates:
+              raise SystemExit("No available iPhone simulator was found on the runner")
+
+          version, name, udid = max(candidates)
+          print(f"Selected {name} with iOS {'.'.join(map(str, version))} ({udid})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"udid={udid}\n")
+          PY
+
+      - name: Boot selected simulator
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Build iOS scheme
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/Itinera.xcodeproj \
+            -scheme Itinera \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build Release configuration
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/Itinera.xcodeproj \
+            -scheme Itinera \
+            -configuration Release \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            ITINERA_PRODUCTION_API_BASE_URL=https://api.example.test \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          plist="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphonesimulator/Itinera.app/Info.plist"
+          test "$(plutil -extract ItineraAPIBaseURL raw "$plist")" = "https://api.example.test"
+          if plutil -p "$plist" | grep -q NSAppTransportSecurity; then
+            echo "::error::Release Info.plist unexpectedly contains an ATS exception."
+            exit 1
+          fi
+
+      - name: Test iOS scheme
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/Itinera.xcodeproj \
+            -scheme Itinera \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ItineraTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Upload iOS test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ItineraTests.xcresult
+          path: ${{ runner.temp }}/ItineraTests.xcresult
+          if-no-files-found: ignore

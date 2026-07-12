@@ -2,6 +2,8 @@ import SwiftUI
 import MapKit
 
 struct TripFormView: View {
+    @EnvironmentObject private var appState: AppState
+
     @State private var city = ""
     @State private var country = ""
     @State private var accommodationQuery = ""
@@ -21,9 +23,17 @@ struct TripFormView: View {
     @State private var isResolvingAddress = false
     @State private var pendingJob: PendingJob?
     @State private var errorMessage: String?
+    @State private var isSubmitting = false
 
     private var formValid: Bool {
         !city.isEmpty && !country.isEmpty && accommodation != nil && departure > arrival
+    }
+
+    private var departureRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        let earliest = calendar.date(byAdding: .day, value: 1, to: arrival) ?? arrival
+        let latest = calendar.date(byAdding: .day, value: 30, to: arrival) ?? earliest
+        return earliest...latest
     }
 
     var body: some View {
@@ -48,7 +58,24 @@ struct TripFormView: View {
                 }
                 Section("Dates") {
                     DatePicker("Arrival", selection: $arrival, displayedComponents: .date)
-                    DatePicker("Departure", selection: $departure, in: arrival..., displayedComponents: .date)
+                        .onChange(of: arrival) { _, _ in
+                            if !departureRange.contains(departure) {
+                                departure = min(
+                                    departureRange.upperBound,
+                                    Calendar.current.date(
+                                        byAdding: .day,
+                                        value: 3,
+                                        to: arrival
+                                    ) ?? departureRange.lowerBound
+                                )
+                            }
+                        }
+                    DatePicker(
+                        "Departure",
+                        selection: $departure,
+                        in: departureRange,
+                        displayedComponents: .date
+                    )
                     DatePicker("Wake-up time", selection: $wakeUpTime, displayedComponents: .hourAndMinute)
                 }
                 Section("Preferences") {
@@ -65,10 +92,15 @@ struct TripFormView: View {
                     }
                 }
                 Section {
-                    Button("Generate Itinerary") { submit() }
-                        .disabled(!formValid)
+                    Button { submit() } label: {
+                        HStack {
+                            if isSubmitting { ProgressView() }
+                            Text(isSubmitting ? "Starting…" : "Generate Itinerary")
+                        }
                         .frame(maxWidth: .infinity)
                         .bold()
+                    }
+                    .disabled(!formValid || isSubmitting)
                 }
             }
             .navigationTitle("Plan a Trip")
@@ -102,16 +134,21 @@ struct TripFormView: View {
 
     private func submit() {
         guard let accommodation else { return }
-        let isoDay = { (d: Date) in d.ISO8601Format(.iso8601.year().month().day()) }
+        let dayFormatter = DateFormatter()
+        dayFormatter.calendar = Calendar(identifier: .gregorian)
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.timeZone = Calendar.current.timeZone
+        dayFormatter.dateFormat = "yyyy-MM-dd"
         let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
         timeFormatter.dateFormat = "HH:mm"
 
         let payload = GenerateItineraryRequest(
             city: city,
             country: country,
             accommodation: accommodation,
-            arrivalDate: isoDay(arrival),
-            departureDate: isoDay(departure),
+            arrivalDate: dayFormatter.string(from: arrival),
+            departureDate: dayFormatter.string(from: departure),
             groupSize: groupSize,
             wakeUpTime: timeFormatter.string(from: wakeUpTime),
             foodPreferences: foodPreferences.isEmpty ? nil : foodPreferences,
@@ -119,9 +156,17 @@ struct TripFormView: View {
             budget: budget
         )
         Task {
+            isSubmitting = true
+            errorMessage = nil
+            defer { isSubmitting = false }
             do {
-                let job = try await APIClient.shared.createItinerary(payload)
+                let job = try await appState.submitItinerary(
+                    payload,
+                    title: "\(city), \(country)"
+                )
                 pendingJob = PendingJob(id: job.jobId)
+            } catch is CancellationError {
+                return
             } catch {
                 errorMessage = error.localizedDescription
             }

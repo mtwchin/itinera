@@ -1,9 +1,15 @@
-"""Trending-places lookup: TikTok Research API with a simulated fallback."""
+"""Normalized trending-place provider adapters.
+
+Synthetic and TikTok Research modes exist for local development and tests.
+Production uses the HTTP adapter, which expects normalized data from an
+internal feed backed by a commercially licensed source.
+"""
 
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
 import requests
 
@@ -12,19 +18,46 @@ TIKTOK_API_URL = "https://open.tiktokapis.com/v2/"
 PLACE_TYPES = ("landmark", "food", "culture", "nature", "shopping")
 
 
+class TrendsProviderUnavailable(RuntimeError):
+    """Raised when the selected provider cannot return trustworthy data."""
+
+
 def fetch_trending_places(
     city: str,
     country: str,
-    api_key: str | None,
+    api_key: str | None = None,
     num_results: int = 10,
+    *,
+    provider: str | None = None,
+    feed_url: str | None = None,
+    feed_api_key: str | None = None,
+    allow_fallback: bool = True,
 ) -> list[dict]:
-    """Return trending places for a destination.
+    """Return normalized places from the explicitly selected provider."""
 
-    Uses the TikTok Research API when a key is configured; otherwise (or on
-    any failure) falls back to simulated data so the pipeline always works.
-    """
-    if not api_key:
+    selected = provider or ("tiktok_research" if api_key else "synthetic")
+    if selected == "synthetic":
         return simulate_trending_places(city, country)
+    if selected == "http":
+        try:
+            return _fetch_http_feed(
+                city,
+                country,
+                num_results=num_results,
+                feed_url=feed_url,
+                api_key=feed_api_key,
+            )
+        except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+            return _fallback_or_raise(city, country, allow_fallback, exc)
+    if selected != "tiktok_research":
+        raise ValueError(f"Unsupported trends provider: {selected}")
+    if not api_key:
+        return _fallback_or_raise(
+            city,
+            country,
+            allow_fallback,
+            TrendsProviderUnavailable("TIKTOK_API_KEY is not configured"),
+        )
 
     try:
         response = requests.post(
@@ -46,15 +79,90 @@ def fetch_trending_places(
                 },
                 "max_count": num_results,
                 "start_date": "20240101",
-                "end_date": datetime.now().strftime("%Y%m%d"),
+                "end_date": datetime.now(timezone.utc).strftime("%Y%m%d"),
             },
             timeout=10,
         )
-        if response.status_code != 200:
-            return simulate_trending_places(city, country)
-        return _parse_tiktok_response(response.json(), city, country)
-    except requests.RequestException:
+        response.raise_for_status()
+        places = _parse_tiktok_response(response.json(), city, country)
+        if not places:
+            raise ValueError("TikTok Research API returned no usable places")
+        return places
+    except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+        return _fallback_or_raise(city, country, allow_fallback, exc)
+
+
+def _fetch_http_feed(
+    city: str,
+    country: str,
+    *,
+    num_results: int,
+    feed_url: str | None,
+    api_key: str | None,
+) -> list[dict]:
+    if not feed_url or not api_key:
+        raise TrendsProviderUnavailable(
+            "TRENDS_FEED_URL and TRENDS_FEED_API_KEY are required"
+        )
+    response = requests.post(
+        feed_url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json={"city": city, "country": country, "limit": num_results},
+        timeout=(3.05, 12),
+    )
+    response.raise_for_status()
+    payload: Any = response.json()
+    raw_places = payload.get("places") if isinstance(payload, dict) else payload
+    if not isinstance(raw_places, list):
+        raise ValueError("Licensed trends feed must return a places array")
+    places = _normalize_places(raw_places[:num_results], city, country, "licensed_http")
+    if not places:
+        raise ValueError("Licensed trends feed returned no usable places")
+    return places
+
+
+def _fallback_or_raise(
+    city: str,
+    country: str,
+    allow_fallback: bool,
+    cause: Exception,
+) -> list[dict]:
+    if allow_fallback:
         return simulate_trending_places(city, country)
+    raise TrendsProviderUnavailable("Trending-place provider is unavailable") from cause
+
+
+def _normalize_places(
+    raw_places: list[Any], city: str, country: str, source: str
+) -> list[dict]:
+    places: list[dict] = []
+    for raw in raw_places:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        place_type = str(raw.get("type", "landmark")).lower()
+        if place_type not in PLACE_TYPES:
+            place_type = "landmark"
+        places.append(
+            {
+                "name": name[:200],
+                "type": place_type,
+                "city": city,
+                "country": country,
+                "description": str(raw.get("description", ""))[:500],
+                "source": str(raw.get("source") or source)[:64],
+                "source_url": str(raw.get("source_url", ""))[:1000] or None,
+                "views": max(int(raw.get("views", 0) or 0), 0),
+                "engagement": max(int(raw.get("engagement", 0) or 0), 0),
+            }
+        )
+    return places
 
 
 def _parse_tiktok_response(data: dict, city: str, country: str) -> list[dict]:
@@ -69,12 +177,13 @@ def _parse_tiktok_response(data: dict, city: str, country: str) -> list[dict]:
                 "city": city,
                 "country": country,
                 "description": description[:200],
+                "source": "tiktok_research",
                 "tiktok_url": f"https://www.tiktok.com/@{video.get('username', '')}/video/{video.get('id', '')}",
                 "views": video.get("view_count", 0),
                 "engagement": video.get("like_count", 0) + video.get("share_count", 0),
             }
         )
-    return places or simulate_trending_places(city, country)
+    return places
 
 
 def _extract_place_name(text: str) -> str:
@@ -113,14 +222,16 @@ def simulate_trending_places(city: str, country: str) -> list[dict]:
         {"name": f"{city} Night Market", "type": "food"},
         {"name": f"{city} Central Park", "type": "nature"},
     ]
+    rng = random.Random(f"{city.casefold()}|{country.casefold()}")
     return [
         {
             **place,
             "city": city,
             "country": country,
-            "description": f"Popular spot in {city}, {country} trending on TikTok",
-            "views": random.randint(10_000, 5_000_000),
-            "engagement": random.randint(1_000, 500_000),
+            "description": f"Synthetic development fixture for {city}, {country}",
+            "source": "synthetic",
+            "views": rng.randint(10_000, 5_000_000),
+            "engagement": rng.randint(1_000, 500_000),
         }
         for place in templates
     ]
