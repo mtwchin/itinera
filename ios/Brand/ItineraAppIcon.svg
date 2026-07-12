@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="paper" x1="80" y1="40" x2="944" y2="984" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFDF7"/>
+      <stop offset="0.54" stop-color="#F4F0E6"/>
+      <stop offset="1" stop-color="#DDD2BE"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#paper)"/>
+
+  <g fill="none" stroke="#2E6F6A" stroke-width="10" stroke-linecap="round" opacity="0.12">
+    <path d="M-80 202C102 123 228 276 416 190C598 107 742 218 1104 132"/>
+    <path d="M-68 340C94 262 251 410 433 328C617 245 808 362 1098 278"/>
+    <path d="M-90 737C109 649 250 804 444 716C626 634 801 742 1110 658"/>
+    <path d="M-66 884C117 798 269 940 455 858C641 776 808 886 1100 804"/>
+  </g>
+
+  <circle cx="512" cy="532" r="286" fill="#1D2923" opacity="0.14"/>
+  <circle cx="512" cy="500" r="286" fill="#D9684A"/>
+  <circle cx="512" cy="500" r="267" fill="none" stroke="#FFFDF7" stroke-width="6" opacity="0.18"/>
+
+  <!-- Original Itinera compass-route mark. -->
+  <path
+    fill="#FFFDF7"
+    transform="translate(512 500) scale(1.18) translate(-512 -500)"
+    d="M512 279C477 279 452 300 438 334L323 680C313 710 347 737 374 720L512 628L650 720C677 737 711 710 701 680L586 334C572 300 547 279 512 279Z"
+  />
+</svg>

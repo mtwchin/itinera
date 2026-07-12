@@ -71,7 +71,11 @@ struct JobPollingPolicy: Sendable, Equatable {
     var maximumDelay: TimeInterval = 10
     var multiplier: Double = 1.8
     var jitterFraction: Double = 0.2
-    var timeout: TimeInterval = 3 * 60
+    // Local inference can consume the composer's full three-minute budget
+    // after queueing, discovery, and geocoding. Keep foreground polling longer
+    // than that end-to-end path; leaving the screen still cancels polling and
+    // the persisted pending job can be resumed from Trips.
+    var timeout: TimeInterval = 10 * 60
 
     func delay(forAttempt attempt: Int, randomUnit: Double = Double.random(in: 0...1)) -> TimeInterval {
         let exponential = min(maximumDelay, initialDelay * pow(multiplier, Double(max(attempt, 0))))

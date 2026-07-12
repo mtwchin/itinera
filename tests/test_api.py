@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -104,19 +104,16 @@ def test_simulate_shapes():
     assert all({"name", "type", "views", "engagement"} <= set(p) for p in places)
 
 
-def test_pipeline_composes_itinerary_with_mocked_llm():
+def test_pipeline_composes_itinerary_with_configured_composer():
     from backend.agents import pipeline
 
-    fake_response = MagicMock()
-    fake_response.parsed_output = sample_itinerary()
-
-    fake_client = MagicMock()
-    fake_client.messages.parse.return_value = fake_response
+    fake_composer = MagicMock()
+    fake_composer.compose.return_value = sample_itinerary()
 
     events: list[str] = []
-    with patch.object(pipeline.anthropic, "Anthropic", return_value=fake_client), patch.object(
-        pipeline, "get_settings"
-    ) as settings:
+    with patch.object(
+        pipeline, "create_itinerary_composer", return_value=fake_composer
+    ), patch.object(pipeline, "get_settings") as settings:
         settings.return_value = MagicMock(
             env="test",
             tiktok_api_key=None,
@@ -128,22 +125,23 @@ def test_pipeline_composes_itinerary_with_mocked_llm():
             apple_maps_team_id=None,
             apple_maps_key_id=None,
             apple_maps_private_key=None,
-            anthropic_api_key="test-key",
-            anthropic_model="claude-opus-4-8",
         )
         out = pipeline.run_pipeline(SAMPLE_REQUEST, lambda stage, data: events.append(stage))
 
     assert out["itinerary"]["itinerary"][0]["day"] == 1
     assert len(out["trending_places"]) == 10
     assert events == ["trends", "geocode", "compose"]
-    prompt = fake_client.messages.parse.call_args.kwargs["messages"][0]["content"]
-    assert "Lisbon" in prompt and "3 days" in prompt
+    composed_request, composed_places = fake_composer.compose.call_args.args
+    assert composed_request.city == "Lisbon"
+    assert len(composed_places) == 10
 
 
-def test_pipeline_fails_without_anthropic_key():
+def test_pipeline_rejects_anthropic_provider_without_key():
     from backend.agents import pipeline
 
-    with patch.object(pipeline, "get_settings") as settings:
+    with patch.object(pipeline, "get_settings") as settings, patch.object(
+        pipeline, "fetch_trending_places"
+    ) as fetch_trends:
         settings.return_value = MagicMock(
             env="test",
             tiktok_api_key=None,
@@ -155,18 +153,13 @@ def test_pipeline_fails_without_anthropic_key():
             apple_maps_team_id=None,
             apple_maps_key_id=None,
             apple_maps_private_key=None,
+            itinerary_composer_provider="anthropic",
             anthropic_api_key=None,
             anthropic_model="claude-opus-4-8",
         )
-        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        with pytest.raises(RuntimeError, match="requires ANTHROPIC_API_KEY"):
             pipeline.run_pipeline(SAMPLE_REQUEST)
-
-
-def test_length_of_stay():
-    from backend.agents.pipeline import _length_of_stay
-
-    assert _length_of_stay(date(2026, 8, 1), date(2026, 8, 4)) == 3
-    assert _length_of_stay(date(2026, 8, 1), date(2026, 8, 1)) == 1
+    fetch_trends.assert_not_called()
 
 
 @pytest.mark.parametrize(

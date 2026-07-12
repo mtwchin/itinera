@@ -22,5 +22,7 @@ ENV/
 # Logs
 *.log
 
-# Node (in case of future use)
-node_modules/
+# Xcode local state
+DerivedData/
+xcuserdata/
+*.xcuserstate

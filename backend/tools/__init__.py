@@ -1,1 +1,1 @@
-# Tools the agents can call (geocode, kmeans, distance_matrix, places_search, etc).
+# Provider-backed discovery and place-enrichment tools used by the itinerary pipeline.

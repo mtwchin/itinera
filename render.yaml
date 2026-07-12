@@ -2,8 +2,9 @@
 # Postgres, and Redis.
 # Docs: https://render.com/docs/blueprint-spec
 #
-# Before production generation, set AUTH_JWT_SECRET, ANTHROPIC_API_KEY,
-# TRENDS_FEED_URL / TRENDS_FEED_API_KEY, and the Apple Maps credentials.
+# Before production generation, set AUTH_JWT_SECRET, the selected composer's
+# endpoint/credentials, TRENDS_FEED_URL / TRENDS_FEED_API_KEY, and the Apple
+# Maps credentials.
 #
 # Everything runs from the same Dockerfile, so moving to AWS/GCP later is a
 # matter of pointing ECS/Cloud Run at the same image.
@@ -48,8 +49,16 @@ services:
           type: keyvalue
           name: itinera-redis
           property: connectionString
-      - key: ANTHROPIC_API_KEY
+      - key: ITINERARY_COMPOSER_PROVIDER
+        value: ollama
+      # Render cannot reach the developer's laptop. Point this at a private,
+      # authenticated Ollama service before enabling production generation.
+      - key: OLLAMA_BASE_URL
         sync: false
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: OLLAMA_MODEL
+        value: qwen2.5:7b-instruct
       - key: AUTH_JWT_SECRET
         sync: false
       - key: TRENDS_PROVIDER

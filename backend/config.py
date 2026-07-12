@@ -18,7 +18,6 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     database_url: str = Field(
         default="postgresql+asyncpg://itinera:itinera@localhost:5432/itinera"
@@ -38,6 +37,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
 
+    itinerary_composer_provider: Literal["ollama", "anthropic"] = "ollama"
+    ollama_base_url: str = "http://localhost:11434/api"
+    ollama_model: str = "qwen2.5:7b-instruct"
+    ollama_api_key: str | None = None
+    ollama_request_timeout_seconds: int = Field(default=180, ge=1, le=600)
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-4-8"
 
@@ -86,7 +90,6 @@ class Settings(BaseSettings):
     otel_service_name: str = "itinera-api"
 
     cache_trending_ttl_seconds: int = 6 * 60 * 60
-    cache_geocode_ttl_seconds: int = 30 * 24 * 60 * 60
     cache_llm_ttl_seconds: int = 24 * 60 * 60
 
 
