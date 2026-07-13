@@ -227,7 +227,10 @@ Account deletion is retry-safe for the iOS durable deletion journal. A first
 `DELETE /api/v1/auth/me` requires an unexpired signed access token and exact
 `"DELETE"` confirmation. After that subject is absent, the same signed token
 may converge to 204 even if it has since expired; malformed or wrong-signature
-tokens remain generic 401s, and no deletion tombstone is retained.
+tokens remain generic 401s, and no deletion tombstone is retained. Signing-key
+rotation must retain verification for previously issued access tokens through
+the durable mobile deletion-retry window, or an offline journal can no longer
+prove its deleted subject.
 
 ## iOS app
 
