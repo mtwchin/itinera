@@ -6,10 +6,10 @@ import redis as redis_sync
 from loguru import logger
 
 from backend.agents.pipeline import run_pipeline
-from backend.cache.terminal import itinerary_stream_channel, terminal_result_key
 from backend.config import get_settings
 from backend.db.models import JobStatus
 from backend.db.repo import claim_job_sync, finish_job_sync, heartbeat_job_sync
+from backend.itinerary_state import itinerary_stream_channel
 from backend.workers.celery_app import celery_app
 
 _settings = get_settings()
@@ -24,14 +24,12 @@ def _publish(client: redis_sync.Redis, job_id: str, event: dict) -> None:
         logger.exception("Unable to publish job event for {}", job_id)
 
 
-def _cache_terminal(client: redis_sync.Redis, job_id: str, payload: dict, ttl: int) -> None:
-    try:
-        client.set(terminal_result_key(job_id), json.dumps(payload), ex=ttl)
-    except redis_sync.RedisError:
-        logger.exception("Unable to cache terminal job state for {}", job_id)
-
-
-@celery_app.task(bind=True, name="itineraries.run_pipeline", max_retries=0)
+@celery_app.task(
+    bind=True,
+    name="itineraries.run_pipeline",
+    max_retries=0,
+    ignore_result=True,
+)
 def run_itinerary_pipeline(
     self,
     *,
@@ -55,8 +53,6 @@ def run_itinerary_pipeline(
         return {
             "job_id": job_id,
             "status": claim.status.value,
-            "result": claim.result,
-            "error": claim.error,
             "version": claim.version,
         }
 
@@ -78,8 +74,8 @@ def run_itinerary_pipeline(
         output = run_pipeline(claim.request, progress)
         itinerary = output["itinerary"]
 
-        # The database commit happens before either Redis operation. A process
-        # crash can therefore lose a notification, but never terminal state.
+        # The database commit happens before the optional Redis notification.
+        # A process crash can lose the hint, but never terminal state.
         persisted = finish_job_sync(
             job_id=job_id,
             run_token=claim.run_token,
@@ -92,11 +88,8 @@ def run_itinerary_pipeline(
         result = {
             "job_id": job_id,
             "status": "succeeded",
-            "result": itinerary,
-            "error": None,
             "version": claim.version,
         }
-        _cache_terminal(client, job_id, result, _settings.cache_llm_ttl_seconds)
         _publish(client, job_id, {"type": "succeeded", "job_id": job_id})
         return result
     except Exception as exc:
@@ -108,13 +101,9 @@ def run_itinerary_pipeline(
             error=error,
         )
         if persisted:
-            failure = {
-                "job_id": job_id,
-                "status": "failed",
-                "result": None,
-                "error": error,
-                "version": claim.version,
-            }
-            _cache_terminal(client, job_id, failure, 3600)
-            _publish(client, job_id, {"type": "failed", "job_id": job_id, "error": error})
+            _publish(
+                client,
+                job_id,
+                {"type": "failed", "job_id": job_id, "error": error},
+            )
         raise

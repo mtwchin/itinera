@@ -3,23 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import current_user, enforce_generation_rate_limit
 from backend.cache.redis import get_redis
-from backend.cache.terminal import (
-    get_coherent_terminal_status,
-    itinerary_stream_channel,
-    refresh_terminal_status,
-    status_from_row,
-    terminal_result_key,
-)
+from backend.config import get_settings
 from backend.db.models import Itinerary, User
 from backend.db.repo import (
     IdempotencyConflictError,
@@ -32,7 +26,8 @@ from backend.db.repo import (
     list_itineraries,
     save_public_itinerary_for_user,
 )
-from backend.db.session import get_session
+from backend.db.session import SessionLocal, get_session
+from backend.itinerary_state import itinerary_stream_channel, status_from_row
 from backend.schemas.itinerary import (
     GenerateItineraryRequest,
     JobAccepted,
@@ -45,6 +40,8 @@ from backend.schemas.itinerary import (
 )
 
 router = APIRouter(tags=["itineraries"])
+_settings = get_settings()
+_T = TypeVar("_T")
 
 
 def _job_urls(job_id: str) -> tuple[str, str]:
@@ -240,7 +237,6 @@ async def save_popular_itinerary(
         )
     row, created = saved
     await session.commit()
-    await refresh_terminal_status(row)
     return SavedPublicItineraryResponse(
         created=created,
         saved_itinerary=SavedItinerary.from_row(row),
@@ -255,10 +251,7 @@ async def get_itinerary(
 ) -> JobStatusResponse:
     row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
 
-    # PostgreSQL authorizes the read and supplies the version/status coherence
-    # token. Redis can accelerate a response but can never supersede that row.
-    cached = await get_coherent_terminal_status(row)
-    return cached or status_from_row(row)
+    return status_from_row(row)
 
 
 @router.get("/itineraries/{job_id}/stream")
@@ -270,62 +263,160 @@ async def stream_itinerary(
     row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
     initial = status_from_row(row).model_dump(mode="json")
     return StreamingResponse(
-        _event_source(job_id, initial),
+        _event_source(job_id, user.id, initial),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def _event_source(job_id: str, initial: dict) -> AsyncIterator[bytes]:
+async def _bounded_redis(operation: Awaitable[_T]) -> _T:
+    async with asyncio.timeout(_settings.redis_operation_timeout_seconds):
+        return await operation
+
+
+async def _close_stream_pubsub(pubsub: Any, *, job_id: str, subscribed: bool) -> None:
+    if subscribed:
+        try:
+            await _bounded_redis(
+                pubsub.unsubscribe(itinerary_stream_channel(job_id))
+            )
+        except (RedisError, TimeoutError):
+            pass
+    try:
+        await _bounded_redis(pubsub.aclose())
+    except (RedisError, TimeoutError):
+        pass
+
+
+async def _authoritative_stream_status(
+    job_id: str, user_id: uuid.UUID
+) -> JobStatusResponse | None:
+    """Reauthorize using one short-lived session per stream reconciliation."""
+
+    async with SessionLocal() as session:
+        row = await get_itinerary_with_access(
+            session,
+            job_id=job_id,
+            user_id=user_id,
+        )
+        return status_from_row(row) if row is not None else None
+
+
+async def _event_source(
+    job_id: str,
+    user_id: uuid.UUID,
+    initial: dict[str, Any],
+) -> AsyncIterator[bytes]:
     if initial["status"] in ("succeeded", "failed"):
         payload = json.dumps(initial)
         yield f"event: result\ndata: {payload}\n\n".encode()
         return
 
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    try:
-        await pubsub.subscribe(itinerary_stream_channel(job_id))
-    except RedisError:
-        payload = json.dumps(initial)
-        yield f"event: status\ndata: {payload}\n\n".encode()
-        return
-    try:
-        # Subscribe before checking the terminal cache so completion cannot
-        # happen in the gap between those operations.
-        result_raw = await redis.get(terminal_result_key(job_id))
-        if result_raw:
-            try:
-                cached = JobStatusResponse.model_validate_json(result_raw)
-            except (TypeError, ValidationError):
-                cached = None
-            if (
-                cached is not None
-                and cached.job_id == job_id
-                and cached.version == initial["version"]
-                and cached.status in ("succeeded", "failed")
-            ):
-                yield f"event: result\ndata: {cached.model_dump_json()}\n\n".encode()
-                return
+    payload = json.dumps(initial)
+    yield f"event: status\ndata: {payload}\n\n".encode()
 
-        async for message in pubsub.listen():
-            if message is None or message.get("type") != "message":
+    pubsub = None
+    subscribed = False
+    try:
+        try:
+            pubsub = get_redis().pubsub()
+            await _bounded_redis(
+                pubsub.subscribe(itinerary_stream_channel(job_id))
+            )
+            subscribed = True
+        except (RedisError, TimeoutError):
+            # Redis is only a low-latency hint. PostgreSQL polling below is
+            # authoritative and remains live when subscribe hangs or fails.
+            if pubsub is not None:
+                await _close_stream_pubsub(
+                    pubsub,
+                    job_id=job_id,
+                    subscribed=False,
+                )
+                pubsub = None
+            subscribed = False
+
+        loop = asyncio.get_running_loop()
+        stream_deadline = loop.time() + _settings.itinerary_stream_max_seconds
+        next_reconcile = 0.0
+        while True:
+            if loop.time() >= stream_deadline:
+                # EventSource reconnects after EOF and re-runs HTTP auth. A
+                # finite lifetime bounds any one stream's polling footprint.
+                return
+            if loop.time() >= next_reconcile:
+                authoritative = await _authoritative_stream_status(job_id, user_id)
+                if authoritative is None:
+                    # Ownership/access was revoked or the trip/account vanished.
+                    return
+                if authoritative.status in ("succeeded", "failed"):
+                    yield (
+                        "event: result\ndata: "
+                        f"{authoritative.model_dump_json()}\n\n"
+                    ).encode()
+                    return
+                next_reconcile = (
+                    loop.time() + _settings.itinerary_stream_reconcile_seconds
+                )
+
+            remaining_stream_seconds = stream_deadline - loop.time()
+            if remaining_stream_seconds <= 0:
+                return
+            wait_seconds = min(
+                max(0.001, next_reconcile - loop.time()),
+                _settings.redis_operation_timeout_seconds,
+                remaining_stream_seconds,
+            )
+            if not subscribed or pubsub is None:
+                await asyncio.sleep(wait_seconds)
                 continue
-            data = message["data"]
-            yield f"data: {data}\n\n".encode()
+
+            try:
+                started_wait = loop.time()
+                read_seconds = min(
+                    wait_seconds,
+                    _settings.redis_operation_timeout_seconds / 2,
+                )
+                message = await _bounded_redis(
+                    pubsub.get_message(
+                        ignore_subscribe_messages=True,
+                        timeout=read_seconds,
+                    )
+                )
+            except (RedisError, TimeoutError):
+                await _close_stream_pubsub(
+                    pubsub,
+                    job_id=job_id,
+                    subscribed=True,
+                )
+                pubsub = None
+                subscribed = False
+                continue
+            if message is None or message.get("type") != "message":
+                remaining = wait_seconds - (loop.time() - started_wait)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                continue
+
+            data = message.get("data")
+            if isinstance(data, bytes):
+                data = data.decode("utf-8", errors="replace")
+            if not isinstance(data, str):
+                continue
             try:
                 parsed = json.loads(data)
                 if parsed.get("type") in ("succeeded", "failed"):
-                    return
+                    # A terminal notification is a wake-up, never authority.
+                    next_reconcile = 0.0
+                    continue
             except (json.JSONDecodeError, AttributeError, TypeError):
-                continue
+                pass
+            yield f"data: {data}\n\n".encode()
             await asyncio.sleep(0)
-    except RedisError:
-        payload = json.dumps(initial)
-        yield f"event: status\ndata: {payload}\n\n".encode()
     finally:
-        try:
-            await pubsub.unsubscribe(itinerary_stream_channel(job_id))
-            await pubsub.close()
-        except RedisError:
-            pass
+        if pubsub is not None:
+            await _close_stream_pubsub(
+                pubsub,
+                job_id=job_id,
+                subscribed=subscribed,
+            )

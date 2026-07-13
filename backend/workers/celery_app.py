@@ -20,6 +20,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=5,
     task_default_max_retries=3,
+    task_store_errors_even_if_ignored=False,
+    # Matches the historical Celery default. Keeping it explicit makes the
+    # one-time legacy result-key drain window operationally auditable.
+    result_expires=24 * 60 * 60,
 )
 
 CeleryInstrumentor().instrument()

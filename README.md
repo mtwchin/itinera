@@ -10,8 +10,8 @@ MapKit-ready locations.
 ```text
 SwiftUI app
   -> FastAPI /api/v1 (guest bearer auth, ownership, idempotency)
-       -> Postgres (users, refresh sessions, jobs, itineraries, outbox)
-       -> Redis (rate limits, terminal cache, foreground progress)
+       -> Postgres (authoritative users, jobs, itineraries, revisions, outbox)
+       -> Redis (rate limits, Celery transport, ephemeral progress hints)
   -> outbox dispatcher -> Celery queue -> leased generation workers
        -> licensed normalized trends feed
        -> Apple Maps Server API

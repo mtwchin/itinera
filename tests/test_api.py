@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +11,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from redis.exceptions import RedisError
 
 from backend.db.models import Itinerary as ItineraryRow
 from backend.db.models import JobStatus, User
@@ -359,93 +357,32 @@ def test_create_itinerary_requires_bearer_token():
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_status_authorizes_owner_before_reading_redis(authenticated_client):
+def test_status_returns_authoritative_postgres_row(authenticated_client):
     client, session, user = authenticated_client
     row = itinerary_row(user, status=JobStatus.succeeded)
     row.result["itinerary"][0]["theme"] = "Database result"
-    cached_result = sample_itinerary().model_dump(mode="json")
-    cached_result["itinerary"][0]["theme"] = "Coherent cached result"
-    result = {
-        "job_id": "abc",
-        "status": "succeeded",
-        "result": cached_result,
-        "error": None,
-        "version": 1,
-    }
-    fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(return_value=json.dumps(result))
     with patch(
         "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=row,
-    ) as lookup, patch("backend.cache.terminal.get_redis", return_value=fake_redis):
+    ) as lookup:
         response = client.get("/api/v1/itineraries/abc")
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
     assert response.json()["version"] == 1
-    assert response.json()["result"]["itinerary"][0]["theme"] == (
-        "Coherent cached result"
-    )
+    assert response.json()["result"]["itinerary"][0]["theme"] == "Database result"
     lookup.assert_awaited_once_with(session, job_id="abc", user_id=user.id)
-    fake_redis.get.assert_awaited_once_with("job:abc:result")
 
 
-def test_status_rejects_stale_terminal_cache_after_revision(authenticated_client):
-    client, _, user = authenticated_client
-    row = itinerary_row(user, status=JobStatus.succeeded, version=2)
-    row.result["itinerary"][0]["theme"] = "Revised database result"
-    stale_result = sample_itinerary().model_dump(mode="json")
-    stale_result["itinerary"][0]["theme"] = "Original cached result"
-    cached = {
-        "job_id": "abc",
-        "status": "succeeded",
-        "result": stale_result,
-        "error": None,
-    }
-    fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(return_value=json.dumps(cached))
-
-    with patch(
-        "backend.routers.itineraries.get_itinerary_with_access",
-        new_callable=AsyncMock,
-        return_value=row,
-    ), patch("backend.cache.terminal.get_redis", return_value=fake_redis):
-        response = client.get("/api/v1/itineraries/abc")
-
-    assert response.status_code == 200
-    assert response.json()["version"] == 2
-    assert response.json()["result"]["itinerary"][0]["theme"] == (
-        "Revised database result"
-    )
-
-
-def test_status_hides_another_users_job_without_touching_cache(authenticated_client):
+def test_status_hides_another_users_job(authenticated_client):
     client, _, _ = authenticated_client
-    redis_factory = MagicMock()
     with patch(
         "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=None,
-    ), patch("backend.cache.terminal.get_redis", redis_factory):
+    ):
         response = client.get("/api/v1/itineraries/not-mine")
     assert response.status_code == 404
-    redis_factory.assert_not_called()
-
-
-def test_status_falls_back_to_postgres_when_redis_is_unavailable(authenticated_client):
-    client, _, user = authenticated_client
-    row = itinerary_row(user, status=JobStatus.succeeded)
-    fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(side_effect=RedisError("cache unavailable"))
-    with patch(
-        "backend.routers.itineraries.get_itinerary_with_access",
-        new_callable=AsyncMock,
-        return_value=row,
-    ), patch("backend.cache.terminal.get_redis", return_value=fake_redis):
-        response = client.get("/api/v1/itineraries/abc")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "succeeded"
 
 
 def test_list_is_scoped_to_current_user(authenticated_client):
