@@ -9,10 +9,11 @@ backlog are tracked in [next-completion-plan.md](next-completion-plan.md).
 
 ## Version 1 product scope
 
-Version 1 includes anonymous onboarding, trip creation, recoverable itinerary
-generation, a saved-trip library, day-by-day maps and activity details, opening
-a route in Apple Maps, itinerary refinement, sharing, and account/data
-deletion. Collaboration, a social feed, Android, and multi-region writes are
+Version 1 includes anonymous onboarding, optional Sign in with Apple recovery,
+trip creation, recoverable itinerary generation, offline saved trips, Today
+mode, day-by-day maps and live travel legs, manual itinerary refinement,
+sharing, trip tools, private invite links, and account/data deletion. Real-time
+collaborative editing, a social feed, Android, and multi-region writes are
 explicitly out of scope.
 
 ## Initial capacity envelope

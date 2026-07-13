@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     auth_access_token_ttl_seconds: int = 15 * 60
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
     auth_refresh_retry_grace_seconds: int = 30
+    apple_sign_in_client_id: str | None = None
 
     # A worker owns a running job until this lease expires. Progress callbacks
     # renew the lease so a broker redelivery cannot execute the same job twice.

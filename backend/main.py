@@ -8,7 +8,7 @@ from backend.config import get_settings
 from backend.observability.logging import configure_logging
 from backend.observability.tracing import configure_tracing
 from backend.routers import auth as auth_router
-from backend.routers import health, itineraries
+from backend.routers import health, itineraries, trips
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth_router.router, prefix="/api/v1")
     app.include_router(itineraries.router, prefix="/api/v1")
+    app.include_router(trips.router, prefix="/api/v1")
 
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 

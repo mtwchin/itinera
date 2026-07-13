@@ -242,6 +242,12 @@ def test_create_itinerary_writes_transactional_job(authenticated_client):
     }
     assert create.await_args.kwargs["user_id"] == user.id
     assert create.await_args.kwargs["idempotency_key"] == "request-123"
+    assert create.await_args.kwargs["request"]["transportation_modes"] == [
+        "Walking",
+        "Transit",
+        "Driving",
+    ]
+    assert create.await_args.kwargs["request"]["accessibility_categories"] == []
     rate_limit.assert_awaited_once_with(user)
     session.commit.assert_awaited_once()
 
@@ -336,21 +342,21 @@ def test_status_authorizes_owner_before_reading_redis(authenticated_client):
     fake_redis = MagicMock()
     fake_redis.get = AsyncMock(return_value=json.dumps(result))
     with patch(
-        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=row,
     ) as lookup, patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
         response = client.get("/api/v1/itineraries/abc")
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
-    lookup.assert_awaited_once_with(session, "abc", user.id)
+    lookup.assert_awaited_once_with(session, job_id="abc", user_id=user.id)
 
 
 def test_status_hides_another_users_job_without_touching_cache(authenticated_client):
     client, _, _ = authenticated_client
     redis_factory = MagicMock()
     with patch(
-        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=None,
     ), patch("backend.routers.itineraries.get_redis", redis_factory):
@@ -365,7 +371,7 @@ def test_status_falls_back_to_postgres_when_redis_is_unavailable(authenticated_c
     fake_redis = MagicMock()
     fake_redis.get = AsyncMock(side_effect=RedisError("cache unavailable"))
     with patch(
-        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=row,
     ), patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
@@ -393,7 +399,7 @@ def test_terminal_stream_is_owner_scoped_and_immediate(authenticated_client):
     client, _, user = authenticated_client
     row = itinerary_row(user, status=JobStatus.succeeded)
     with patch(
-        "backend.routers.itineraries.get_itinerary_by_job_for_user",
+        "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=row,
     ):

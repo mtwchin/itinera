@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
 
-struct LocationCoordinate: Equatable, Hashable, Sendable {
+struct LocationCoordinate: Codable, Equatable, Hashable, Sendable {
     var latitude: Double
     var longitude: Double
 
@@ -10,12 +10,13 @@ struct LocationCoordinate: Equatable, Hashable, Sendable {
     }
 }
 
-struct SelectedLocation: Equatable, Hashable, Sendable {
+struct SelectedLocation: Codable, Equatable, Hashable, Sendable {
     var name: String
     var address: String
     var city: String
     var country: String
     var coordinate: LocationCoordinate
+    var timeZoneIdentifier: String? = nil
 
     var destinationInputLabel: String {
         [city, country]
