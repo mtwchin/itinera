@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import "./globals.css";
 
 const title = "Itinera — A field guide for the trip you actually take";
@@ -7,21 +6,12 @@ const description =
   "Plan paced, day-by-day city itineraries around your stay, keep your next move close, and adapt when the day changes.";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = (
-    requestHeaders.get("x-forwarded-host") ??
-    requestHeaders.get("host") ??
-    "localhost:3000"
-  ).split(",")[0].trim();
-  const forwardedProtocol = requestHeaders
-    .get("x-forwarded-proto")
-    ?.split(",")[0]
-    .trim();
-  const protocol = forwardedProtocol === "https" ? "https" : "http";
-
   let origin: URL;
   try {
-    origin = new URL(`${protocol}://${host}`);
+    origin = new URL(process.env.SITE_URL ?? "http://localhost:3000");
+    if (!["http:", "https:"].includes(origin.protocol)) {
+      throw new Error("SITE_URL must use HTTP or HTTPS");
+    }
   } catch {
     origin = new URL("http://localhost:3000");
   }
