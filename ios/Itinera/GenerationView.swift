@@ -87,7 +87,7 @@ struct GenerationView: View {
                             Text("Finding the right rhythm")
                                 .font(.system(.title3, design: .serif, weight: .bold))
                                 .foregroundStyle(theme.primaryText)
-                            Text("This can take a few minutes with a local model. You can leave this screen—your trip will keep generating and appear in Trips.")
+                            Text("This can take a few minutes. You can leave this screen—your trip will keep generating in the background and appear in Trips.")
                                 .font(.subheadline)
                                 .foregroundStyle(theme.secondaryText)
                                 .multilineTextAlignment(.center)
