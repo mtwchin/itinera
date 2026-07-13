@@ -2,9 +2,9 @@
 # Postgres, and Redis.
 # Docs: https://render.com/docs/blueprint-spec
 #
-# Before production generation, set AUTH_JWT_SECRET, the selected composer's
-# endpoint/credentials, TRENDS_FEED_URL / TRENDS_FEED_API_KEY, and the Apple
-# Maps credentials.
+# Before production generation, set the API's AUTH_JWT_SECRET and the worker's
+# selected composer, trends-feed, and Apple Maps credentials. Credentials are
+# intentionally scoped to the process role that consumes them.
 #
 # Everything runs from the same Dockerfile, so moving to AWS/GCP later is a
 # matter of pointing ECS/Cloud Run at the same image.
@@ -23,11 +23,13 @@ services:
     name: itinera-api
     runtime: docker
     plan: starter
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /healthz
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 300
     preDeployCommand: sh -c "alembic upgrade head && python scripts/seed_public_itineraries.py"
     dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
-    envVars: &shared_env
+    envVars:
       - key: ENV
         value: prod
       - key: DATABASE_URL
@@ -39,49 +41,61 @@ services:
           type: keyvalue
           name: itinera-redis
           property: connectionString
-      - key: CELERY_BROKER_URL
-        fromService:
-          type: keyvalue
-          name: itinera-redis
-          property: connectionString
-      - key: CELERY_RESULT_BACKEND
-        fromService:
-          type: keyvalue
-          name: itinera-redis
-          property: connectionString
-      - key: ITINERARY_COMPOSER_PROVIDER
-        value: openai
-      - key: OPENAI_MODEL
-        value: gpt-5.6-luna
-      # Retained for deployments that switch back to a private, authenticated
-      # Ollama service. Render cannot reach the developer's laptop.
-      - key: OLLAMA_BASE_URL
-        sync: false
-      - key: OLLAMA_API_KEY
-        sync: false
-      - key: OLLAMA_MODEL
-        value: qwen2.5:7b-instruct
+      - key: REDIS_OPERATION_TIMEOUT_SECONDS
+        value: "0.5"
+      - key: READINESS_CHECK_TIMEOUT_SECONDS
+        value: "2"
+      - key: READINESS_CACHE_TTL_SECONDS
+        value: "2"
       - key: AUTH_JWT_SECRET
         sync: false
-      - key: TRENDS_PROVIDER
-        value: http
-      - key: TRENDS_FEED_URL
+      - key: AUTH_JWT_ISSUER
+        value: itinera-api
+      - key: AUTH_JWT_AUDIENCE
+        value: itinera-ios
+      - key: APPLE_SIGN_IN_CLIENT_ID
         sync: false
-      - key: TRENDS_FEED_API_KEY
+      - key: GENERATION_ADMISSION_ENABLED
+        # Operator-owned: rollout requires false until the complete P2 fleet is
+        # verified behind Render Maintenance Mode.
         sync: false
-      - key: MAPS_PROVIDER
-        value: apple
-      - key: APPLE_MAPS_TEAM_ID
-        sync: false
-      - key: APPLE_MAPS_KEY_ID
-        sync: false
-      - key: APPLE_MAPS_PRIVATE_KEY
-        sync: false
+      - key: GENERATION_DISABLED_RETRY_AFTER_SECONDS
+        value: "60"
+      - key: ADMISSION_UNAVAILABLE_RETRY_AFTER_SECONDS
+        value: "5"
+      - key: RATE_LIMIT_GENERATIONS_PER_WINDOW
+        value: "10"
+      - key: RATE_LIMIT_GLOBAL_GENERATIONS_PER_WINDOW
+        value: "1000"
+      - key: RATE_LIMIT_GUEST_SESSIONS_PER_WINDOW
+        value: "20"
+      - key: RATE_LIMIT_GLOBAL_GUEST_SESSIONS_PER_WINDOW
+        value: "5000"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "3600"
+      - key: ITINERARY_STREAM_RECONCILE_SECONDS
+        value: "2"
+      - key: ITINERARY_STREAM_MAX_SECONDS
+        value: "300"
+      - key: ITINERARY_STREAM_DATABASE_TIMEOUT_SECONDS
+        value: "3"
+      # Dedicated SSE reconciliation pool. With the API SQLAlchemy pool's
+      # 10 regular + 20 overflow ceiling, this makes the per-instance maximum
+      # 10 + 20 + 10 = 40 PostgreSQL connections.
+      - key: ITINERARY_STREAM_DATABASE_POOL_SIZE
+        value: "10"
+      - key: ITINERARY_STREAM_MAX_CONNECTIONS_PER_PRINCIPAL
+        value: "2"
+      - key: ITINERARY_STREAM_LEASE_TTL_SECONDS
+        value: "30"
+      - key: ITINERARY_STREAM_LEASE_RENEW_SECONDS
+        value: "10"
 
   - type: worker
     name: itinera-worker
     runtime: docker
     plan: starter
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     preDeployCommand: alembic upgrade head
     dockerCommand: celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4
@@ -109,20 +123,26 @@ services:
           type: keyvalue
           name: itinera-redis
           property: connectionString
+      - key: ITINERARY_JOB_LEASE_SECONDS
+        value: "3600"
       - key: ITINERARY_COMPOSER_PROVIDER
         value: openai
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
         value: gpt-5.6-luna
+      - key: OPENAI_REQUEST_TIMEOUT_SECONDS
+        value: "180"
+      # Retained for deployments that switch back to a private, authenticated
+      # Ollama service. Render cannot reach the developer's laptop.
       - key: OLLAMA_BASE_URL
         sync: false
       - key: OLLAMA_API_KEY
         sync: false
       - key: OLLAMA_MODEL
         value: qwen2.5:7b-instruct
-      - key: AUTH_JWT_SECRET
-        sync: false
+      - key: OLLAMA_REQUEST_TIMEOUT_SECONDS
+        value: "180"
       - key: TRENDS_PROVIDER
         value: http
       - key: TRENDS_FEED_URL
@@ -142,7 +162,28 @@ services:
     name: itinera-outbox
     runtime: docker
     plan: starter
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     preDeployCommand: alembic upgrade head
     dockerCommand: python -m backend.workers.outbox_dispatcher
-    envVars: *shared_env
+    envVars:
+      - key: ENV
+        value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itinera-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: OUTBOX_REDISPATCH_INITIAL_SECONDS
+        value: "300"
+      - key: OUTBOX_REDISPATCH_MAX_SECONDS
+        value: "3600"
