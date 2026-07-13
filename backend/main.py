@@ -3,22 +3,30 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from backend.auth import validate_auth_settings
+from backend.cache.redis import close_redis
 from backend.config import get_settings
+from backend.db.session import engine
 from backend.observability.logging import configure_logging
 from backend.observability.tracing import configure_tracing
 from backend.routers import auth as auth_router
 from backend.routers import health, itineraries, trips
+from backend.stream_status import terminate_stream_status_pool
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    del app
+    try:
+        yield
+    finally:
+        health.reset_readiness_cache()
+        terminate_stream_status_pool()
+        await close_redis()
+        await engine.dispose()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    validate_auth_settings(settings)
     app = FastAPI(
         title="Itinera API",
         version="1.0.0",

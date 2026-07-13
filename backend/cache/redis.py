@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from typing import Any
 
 import redis.asyncio as redis_asyncio
+from redis.exceptions import RedisError
 
 from backend.config import get_settings
 
@@ -19,8 +21,26 @@ def get_redis() -> redis_asyncio.Redis:
             _settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
+            socket_connect_timeout=_settings.redis_operation_timeout_seconds,
+            socket_timeout=_settings.redis_operation_timeout_seconds,
+            retry_on_timeout=False,
         )
     return _client
+
+
+async def close_redis() -> None:
+    """Bound shutdown cleanup for the shared async Redis connection pool."""
+
+    global _client
+    client, _client = _client, None
+    if client is None:
+        return
+    try:
+        async with asyncio.timeout(_settings.redis_operation_timeout_seconds):
+            await client.aclose()
+    except (RedisError, TimeoutError):
+        # Shutdown must not wait indefinitely for an unavailable dependency.
+        return
 
 
 def hash_key(prefix: str, payload: Any) -> str:

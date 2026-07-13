@@ -650,7 +650,13 @@ def test_delete_trip_commits_without_redis_cleanup(trip_client):
 
 
 def test_delete_my_data_requires_exact_confirmation(trip_client):
+    from backend.auth import DeletionIdentity, deletion_identity
+
     client, session, user = trip_client
+    app.dependency_overrides[deletion_identity] = lambda: DeletionIdentity(
+        subject_id=user.id,
+        user=user,
+    )
     assert client.request(
         "DELETE", "/api/v1/auth/me", json={"confirmation": "delete"}
     ).status_code == 422

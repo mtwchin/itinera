@@ -10,29 +10,48 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import InvalidTokenError
-from redis.exceptions import RedisError
+from jwt import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.admission import (
+    AdmissionPolicy,
+    AdmissionReason,
+    CoordinationProtocolError,
+    CoordinationStateError,
+    CoordinationTimeoutError,
+    CoordinationUnavailableError,
+    evaluate_admission,
+)
 from backend.cache.redis import get_redis
 from backend.config import Settings, get_settings
 from backend.db.models import GuestRefreshToken, User
 from backend.db.session import get_session
+from backend.observability.platform_metrics import record_admission
 
 _bearer = HTTPBearer(auto_error=False)
 _DEVELOPMENT_SECRET = "dev-only-change-this-signing-secret"
+_REQUIRED_ACCESS_CLAIMS = ["exp", "iat", "iss", "aud", "sub", "type", "jti"]
 
 
 class RefreshTokenError(Exception):
     def __init__(self, message: str, *, persist_revocation: bool = False) -> None:
         super().__init__(message)
         self.persist_revocation = persist_revocation
+
+
+@dataclass(frozen=True, slots=True)
+class DeletionIdentity:
+    """A signed access-token subject and its current database identity, if any."""
+
+    subject_id: uuid.UUID
+    user: User | None
 
 
 def _now() -> datetime:
@@ -72,19 +91,80 @@ def decode_access_token(token: str, *, settings: Settings | None = None) -> uuid
     settings = settings or get_settings()
     validate_auth_settings(settings)
     try:
-        payload = jwt.decode(
-            token,
-            settings.auth_jwt_secret,
-            algorithms=["HS256"],
-            audience=settings.auth_jwt_audience,
-            issuer=settings.auth_jwt_issuer,
-            options={"require": ["exp", "iat", "iss", "aud", "sub", "type", "jti"]},
+        payload = _decode_signed_access_claims(
+            token, settings=settings, verify_expiration=True
         )
-        if payload.get("type") != "access":
-            raise InvalidTokenError("wrong token type")
-        return uuid.UUID(payload["sub"])
-    except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
+        return _access_token_subject(payload)
+    except (InvalidTokenError, KeyError, OverflowError, TypeError, ValueError) as exc:
         raise _credentials_error() from exc
+
+
+def _decode_deletion_access_token(
+    token: str, *, settings: Settings | None = None
+) -> tuple[uuid.UUID, bool]:
+    """Verify an access token and report whether only its expiry is stale."""
+
+    settings = settings or get_settings()
+    validate_auth_settings(settings)
+    try:
+        payload = _decode_signed_access_claims(
+            token, settings=settings, verify_expiration=True
+        )
+        return _access_token_subject(payload), False
+    except ExpiredSignatureError:
+        # Retry convergence is allowed only after a valid access token expires.
+        # Re-decode while still verifying its signature, issuer, audience, and
+        # every other required claim; an expiry error must not mask those checks.
+        try:
+            payload = _decode_signed_access_claims(
+                token, settings=settings, verify_expiration=False
+            )
+            subject_id = _access_token_subject(payload)
+            expiration = payload["exp"]
+            if isinstance(expiration, bool):
+                raise InvalidTokenError("invalid expiration")
+            expiration_seconds = int(expiration)
+            if expiration_seconds > _now().timestamp():
+                raise InvalidTokenError("token is not expired")
+            return subject_id, True
+        except (
+            InvalidTokenError,
+            KeyError,
+            OverflowError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise _credentials_error() from exc
+    except (InvalidTokenError, KeyError, OverflowError, TypeError, ValueError) as exc:
+        raise _credentials_error() from exc
+
+
+def _decode_signed_access_claims(
+    token: str,
+    *,
+    settings: Settings,
+    verify_expiration: bool,
+) -> dict:
+    return jwt.decode(
+        token,
+        settings.auth_jwt_secret,
+        algorithms=["HS256"],
+        audience=settings.auth_jwt_audience,
+        issuer=settings.auth_jwt_issuer,
+        options={
+            "require": _REQUIRED_ACCESS_CLAIMS,
+            "verify_exp": verify_expiration,
+        },
+    )
+
+
+def _access_token_subject(payload: dict) -> uuid.UUID:
+    if payload.get("type") != "access":
+        raise InvalidTokenError("wrong token type")
+    subject = payload.get("sub")
+    if not isinstance(subject, str):
+        raise InvalidTokenError("invalid token subject")
+    return uuid.UUID(subject)
 
 
 def generate_refresh_token() -> str:
@@ -116,6 +196,29 @@ async def current_user(
     if user is None:
         raise _credentials_error()
     return user
+
+
+async def deletion_identity(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    session: AsyncSession = Depends(get_session),
+) -> DeletionIdentity:
+    """Authorize account deletion while allowing safe retries after deletion.
+
+    A current user must present a normally valid, unexpired access token. Once
+    that signed subject no longer exists, the same request can converge to 204,
+    including after token expiry. Invalid signatures and malformed tokens never
+    reach the database lookup.
+    """
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise _credentials_error("Bearer access token required")
+    subject_id, expired = _decode_deletion_access_token(credentials.credentials)
+    user = (
+        await session.execute(select(User).where(User.id == subject_id))
+    ).scalar_one_or_none()
+    if expired and user is not None:
+        raise _credentials_error()
+    return DeletionIdentity(subject_id=subject_id, user=user)
 
 
 async def create_guest_session(
@@ -266,57 +369,112 @@ async def _issue_refresh_replacement(
 
 async def enforce_generation_rate_limit(user: User = Depends(current_user)) -> None:
     settings = get_settings()
-    await _enforce_redis_limit(
-        key=f"ratelimit:generate:user:{user.id}",
-        limit=settings.rate_limit_generations_per_window,
-        window_seconds=settings.rate_limit_window_seconds,
-        detail="Generation limit reached; try again later",
-    )
-    await _enforce_redis_limit(
-        key="ratelimit:generate:global",
-        limit=settings.rate_limit_global_generations_per_window,
-        window_seconds=settings.rate_limit_window_seconds,
-        detail="Generation capacity is temporarily full; try again later",
-    )
+    if not settings.generation_admission_enabled:
+        record_admission(AdmissionPolicy.GENERATION.value, "disabled")
+        raise _admission_http_error(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="generation_disabled",
+            message="New itinerary generation is temporarily paused.",
+            retry_after=settings.generation_disabled_retry_after_seconds,
+        )
+    try:
+        decision = await evaluate_admission(
+            get_redis(),
+            AdmissionPolicy.GENERATION,
+            str(user.id),
+            environment=settings.env,
+            principal_limit=settings.rate_limit_generations_per_window,
+            global_limit=settings.rate_limit_global_generations_per_window,
+            window_seconds=settings.rate_limit_window_seconds,
+            timeout_seconds=settings.redis_operation_timeout_seconds,
+        )
+    except CoordinationUnavailableError as exc:
+        record_admission(
+            AdmissionPolicy.GENERATION.value,
+            _coordination_outcome(exc),
+        )
+        raise _admission_http_error(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="generation_admission_unavailable",
+            message="Generation admission is temporarily unavailable.",
+            retry_after=settings.admission_unavailable_retry_after_seconds,
+        ) from exc
+    if not decision.admitted:
+        record_admission(
+            AdmissionPolicy.GENERATION.value,
+            _denial_outcome(decision.reason),
+        )
+        raise _admission_http_error(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            code="generation_rate_limited",
+            message="Generation capacity is temporarily full; try again later.",
+            retry_after=decision.retry_after_seconds,
+        )
+    record_admission(AdmissionPolicy.GENERATION.value, "allowed")
 
 
 async def enforce_guest_session_rate_limit(request: Request) -> None:
     settings = get_settings()
     client_host = request.client.host if request.client else "unknown"
-    client_digest = hashlib.sha256(client_host.encode("utf-8")).hexdigest()[:24]
-    await _enforce_redis_limit(
-        key=f"ratelimit:guest:client:{client_digest}",
-        limit=settings.rate_limit_guest_sessions_per_window,
-        window_seconds=settings.rate_limit_window_seconds,
-        detail="Too many guest sessions; try again later",
-    )
-    await _enforce_redis_limit(
-        key="ratelimit:guest:global",
-        limit=settings.rate_limit_global_guest_sessions_per_window,
-        window_seconds=settings.rate_limit_window_seconds,
-        detail="Guest sign-up capacity is temporarily full; try again later",
-    )
-
-
-async def _enforce_redis_limit(
-    *, key: str, limit: int, window_seconds: int, detail: str
-) -> None:
-    redis = get_redis()
     try:
-        count = await redis.incr(key)
-        if count == 1:
-            await redis.expire(key, window_seconds)
-        if count <= limit:
-            return
-        ttl = await redis.ttl(key)
-    except RedisError as exc:
-        raise HTTPException(
+        decision = await evaluate_admission(
+            get_redis(),
+            AdmissionPolicy.GUEST,
+            client_host,
+            environment=settings.env,
+            principal_limit=settings.rate_limit_guest_sessions_per_window,
+            global_limit=settings.rate_limit_global_guest_sessions_per_window,
+            window_seconds=settings.rate_limit_window_seconds,
+            timeout_seconds=settings.redis_operation_timeout_seconds,
+        )
+    except CoordinationUnavailableError as exc:
+        record_admission(
+            AdmissionPolicy.GUEST.value,
+            _coordination_outcome(exc),
+        )
+        raise _admission_http_error(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Request admission control is temporarily unavailable",
-            headers={"Retry-After": "5"},
+            code="guest_admission_unavailable",
+            message="Guest-session admission is temporarily unavailable.",
+            retry_after=settings.admission_unavailable_retry_after_seconds,
         ) from exc
-    raise HTTPException(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=detail,
-        headers={"Retry-After": str(max(ttl, 1))},
+    if not decision.admitted:
+        record_admission(
+            AdmissionPolicy.GUEST.value,
+            _denial_outcome(decision.reason),
+        )
+        raise _admission_http_error(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            code="guest_session_rate_limited",
+            message="Guest-session capacity is temporarily full; try again later.",
+            retry_after=decision.retry_after_seconds,
+        )
+    record_admission(AdmissionPolicy.GUEST.value, "allowed")
+
+
+def _coordination_outcome(exc: CoordinationUnavailableError) -> str:
+    if isinstance(exc, CoordinationTimeoutError):
+        return "timeout"
+    if isinstance(exc, CoordinationStateError):
+        return "invalid_state"
+    if isinstance(exc, CoordinationProtocolError):
+        return "invalid_protocol"
+    return "unavailable"
+
+
+def _denial_outcome(reason: AdmissionReason) -> str:
+    if reason == AdmissionReason.PRINCIPAL:
+        return "denied_principal"
+    if reason == AdmissionReason.GLOBAL:
+        return "denied_global"
+    return "denied_both"
+
+
+def _admission_http_error(
+    *, status_code: int, code: str, message: str, retry_after: int
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+        headers={"Retry-After": str(retry_after)},
     )
