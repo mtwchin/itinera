@@ -23,7 +23,6 @@ from backend.auth import (
     enforce_guest_session_rate_limit,
     rotate_guest_refresh_token,
 )
-from backend.cache.terminal import invalidate_terminal_statuses
 from backend.config import get_settings
 from backend.db.models import User
 from backend.db.repo import delete_user_data
@@ -232,7 +231,6 @@ async def delete_my_data(
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     del payload  # Pydantic enforces an explicit, exact "DELETE" confirmation.
-    deleted_job_ids = await delete_user_data(session, user=user)
+    await delete_user_data(session, user=user)
     await session.commit()
-    await invalidate_terminal_statuses(deleted_job_ids)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
