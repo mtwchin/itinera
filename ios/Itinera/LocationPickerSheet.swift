@@ -5,6 +5,7 @@ import SwiftUI
 enum LocationPickerPurpose: String, Identifiable, Sendable {
     case destination
     case homeBase
+    case activity
 
     var id: String { rawValue }
 
@@ -12,6 +13,7 @@ enum LocationPickerPurpose: String, Identifiable, Sendable {
         switch self {
         case .destination: "Choose a destination"
         case .homeBase: "Choose your home base"
+        case .activity: "Choose a stop"
         }
     }
 
@@ -19,6 +21,7 @@ enum LocationPickerPurpose: String, Identifiable, Sendable {
         switch self {
         case .destination: "City or region"
         case .homeBase: "Hotel, neighborhood, or address"
+        case .activity: "Place or address"
         }
     }
 }
@@ -426,14 +429,14 @@ struct LocationPickerSheet: View {
     }
 
     private func searchQuery(_ submittedQuery: String) -> String {
-        guard purpose == .homeBase, let searchBias else { return submittedQuery }
+        guard purpose != .destination, let searchBias else { return submittedQuery }
         return "\(submittedQuery), \(searchBias.destinationInputLabel)"
     }
 
     private func inputLabel(for location: SelectedLocation) -> String {
         switch purpose {
         case .destination: location.destinationInputLabel
-        case .homeBase: location.homeBaseInputLabel
+        case .homeBase, .activity: location.homeBaseInputLabel
         }
     }
 
@@ -443,6 +446,8 @@ struct LocationPickerSheet: View {
             !location.city.isEmpty && !location.country.isEmpty
         case .homeBase:
             !location.homeBaseInputLabel.isEmpty
+        case .activity:
+            !location.name.isEmpty && !location.homeBaseInputLabel.isEmpty
         }
     }
 
@@ -464,7 +469,8 @@ struct LocationPickerSheet: View {
             coordinate: LocationCoordinate(
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude
-            )
+            ),
+            timeZoneIdentifier: placemark.timeZone?.identifier
         )
         return isValid(location) ? location : nil
     }
@@ -501,7 +507,8 @@ struct LocationPickerSheet: View {
             coordinate: LocationCoordinate(
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude
-            )
+            ),
+            timeZoneIdentifier: placemark.timeZone?.identifier
         )
     }
 }

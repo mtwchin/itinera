@@ -7,29 +7,65 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		006B6170827DDE5E53902D8E /* NativeTripActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BAC3F2E900C730779E997F /* NativeTripActions.swift */; };
 		04EFE53892EB1DC230720D3B /* TripDateRange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 856E5D64A9B45958AAB01C0D /* TripDateRange.swift */; };
+		0563E0C4EFFCBC15500BD15C /* NativeTripActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0BCCB59EA0E53CC3E7B2EB2 /* NativeTripActionsTests.swift */; };
+		076564A7F750A2CF5A7B6876 /* SettingsPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F229B044C84F6BBA5B4999A0 /* SettingsPreferencesTests.swift */; };
 		0A29C2E47BA444886B1B7187 /* GenerationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F68A0FE3ED6CECFFCB9A84B /* GenerationView.swift */; };
+		0CE6DB02563D8E00F2544884 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7453490B6E4A759459141A88 /* PrivacyInfo.xcprivacy */; };
 		101BD41497CB02287481CE9A /* SavedTripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */; };
 		129C98C2579C2DE6559E4874 /* ItineraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */; };
+		137916A1A7078EE3ACA45DA4 /* TripDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37EBE77E1D1A29048D0B526C /* TripDraftTests.swift */; };
 		1906DF115A3E26922F6A7E96 /* GoogleMapsURLBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9ABC6CF87D1728B2AC8001D /* GoogleMapsURLBuilderTests.swift */; };
+		19E0807859F2236DF7BEE9B2 /* TripWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87F38461EDBAC5C92D5E9363 /* TripWidgetSnapshot.swift */; };
 		2160DFF33C6BB78A6340857F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EC031A39B61119A20821D41 /* Models.swift */; };
 		24F3DA2639BB1031E8C5F875 /* APIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */; };
+		2C1F47776F564ECFAE18568A /* TripMutationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912EB590A13249F754F71803 /* TripMutationModels.swift */; };
+		32D1882E91E8C6A587305872 /* ItineraryPDFExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F13600F66F0D9CDFD5ED093 /* ItineraryPDFExporterTests.swift */; };
+		361F25734B3CF0FE60020687 /* ItineraryPDFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8AB19446885569E477606A6 /* ItineraryPDFExporter.swift */; };
+		37F0C9A076078B8E2FF2A22D /* ItineraWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 57ABB737429E54DDC9175B8B /* ItineraWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		3800A1CB49EE19C496E50354 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9502E097B9016F3E58A9EB8F /* Assets.xcassets */; };
+		39AE1A47AB0206C851CD7039 /* GenerationNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2800E5F529CCD900558032F /* GenerationNotificationManager.swift */; };
+		3B06E25446733AF8AFC9C7B9 /* TodayTripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E98DFB897560E55EC481712 /* TodayTripView.swift */; };
+		3E046E58AB0A03B2F49F241F /* CompletedTripCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 571398FA6F8DDF819B84F5D9 /* CompletedTripCacheTests.swift */; };
+		4A76722688CBC3D72255BA9E /* TripWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87F38461EDBAC5C92D5E9363 /* TripWidgetSnapshot.swift */; };
+		4DB5C6EA685485071F2B2CA2 /* PlaceReportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0737D1805334F4FF442200D9 /* PlaceReportSheet.swift */; };
+		4DFE21DD531FB4F080E6CB73 /* TripToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A853E4D499C03CCE76E53A /* TripToolsView.swift */; };
 		541E2891AB5EDD8282ED0F99 /* PopularItinerariesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C36EEFBC3215BFA5ED68B48 /* PopularItinerariesView.swift */; };
 		5509C9200D2AE0EBFA7E7FF3 /* SecureCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */; };
+		60B856C9CCDA9D95EFF28673 /* TripEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4E8C2DEEC175416A7D61FF /* TripEditorView.swift */; };
 		614C9D1DAEC7C550A3A5AB76 /* TripFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E87B6096DFB7B5383C31770 /* TripFormView.swift */; };
 		63FED0414A5DE5E0B5CBDDC4 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48680DD2BF380C9F75FF5CF9 /* AppState.swift */; };
+		67E05C4C977A18CB32431D87 /* ArchivedTripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82DAB910F09E07E242617418 /* ArchivedTripsView.swift */; };
+		687F5DE8A2C0EB0E0B5E9834 /* TripLibraryOrganizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2146BDEB6A3A948F16993466 /* TripLibraryOrganizerTests.swift */; };
 		702D42180E9510CAC94B9779 /* LocationPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0994438A97DF85B7D30A5EAA /* LocationPickerSheet.swift */; };
+		75538FFC3AE839D62B801088 /* DayRoutePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF4D2FAD57047B539EA6EEF /* DayRoutePlanner.swift */; };
+		763FBB744AF24A9FA98EBA74 /* TripLibraryOrganizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F03BA3D112B3F056EE2476A /* TripLibraryOrganizer.swift */; };
 		7718CA28C77239D42DAAACCD /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C58F1204B4D945BE48C7A5A /* APIClient.swift */; };
 		78DE2D31CBC2760900FD5328 /* SelectedLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783B9577C40FA7098655E660 /* SelectedLocation.swift */; };
+		7B2D8AF32D4369935B7EBABA /* WeatherAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06423C680D1FB05A0B7404C /* WeatherAdvisory.swift */; };
+		91D7EF3DD16EB83697AB6F39 /* TripDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5488CD6CD01C10548336130 /* TripDraft.swift */; };
 		92D92B9DF67FB86788908B38 /* GoogleMapsURLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9507B7E6467C20F53217A111 /* GoogleMapsURLBuilder.swift */; };
+		9900DA290219DA54796D800D /* TripProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6982168E23842DA1265C6B /* TripProgressStore.swift */; };
 		9AF5EC81A475C65CC22C5A37 /* ItineraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */; };
 		9D8626E6494FCED9D4C45F59 /* APIConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */; };
+		A1160C680EF8F97F06101A4B /* TripMutationAPIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BEC5CEA53644FBCD5F977CA /* TripMutationAPIClientTests.swift */; };
+		A25A0781CF248DE549245E46 /* TripProgressStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E53CF29CEF5A94AED2FA6403 /* TripProgressStoreTests.swift */; };
+		B07CDE1B0EA9DA0EDC3DA2DA /* TripLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF80E7E0CD71E4612BD89EBA /* TripLiveActivity.swift */; };
+		B4482F387EFAC2760071C5D4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18423052A9D3C3F6B44D4C08 /* SettingsView.swift */; };
 		BABC3E599DB3AE0975C04DB4 /* PendingJobStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */; };
+		BE53A594D998A30B9B1E67FB /* SettingsPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D91CDFAB0C97AFE38D17244 /* SettingsPreferences.swift */; };
+		BED5E83056F7A95731391B42 /* TodayTripViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0887B06F0E059DCE163D611 /* TodayTripViewModelTests.swift */; };
+		BFEBCB4E8C0230454D04E4C6 /* TripActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB97426EC2FBD28D61019E8F /* TripActivityAttributes.swift */; };
+		C465910C5C8B07C6D2AA543A /* ItineraWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6475E1BD8CBBE6C8788B10DA /* ItineraWidgetBundle.swift */; };
+		C98CE7743F8F88BB045D1A0F /* CompletedTripCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4CF0EBB1D7B7711830E577 /* CompletedTripCache.swift */; };
+		CFED9BED5C2E84A8D8DC6FD2 /* TripWidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFC47677A2C72AE38C75FA80 /* TripWidgetSnapshotTests.swift */; };
 		D19D1A7C31E3A4CCFFB69F13 /* PreviewFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0296C4EE5FCABE620F0A80BF /* PreviewFixtures.swift */; };
 		D91C42D8CCF79EF8B5863FC0 /* ItineraTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CDA8CC94A84E60BA8803F0F /* ItineraTheme.swift */; };
 		DADA70D7EBB4067E5E48509E /* TripDateRangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34DD1DB233DA698C1A984FE1 /* TripDateRangeTests.swift */; };
 		DBD77BC4DA7FC34535493E1D /* PendingJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */; };
+		E2345820FAC403B39BCF23AC /* TripActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB97426EC2FBD28D61019E8F /* TripActivityAttributes.swift */; };
+		F8FA2089F1B3851F6C94F4D7 /* TripPlatformModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F1958AA1F13BBBF245A6B8 /* TripPlatformModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,43 +76,121 @@
 			remoteGlobalIDString = 9D8F65B43EBCE03D58381E6D;
 			remoteInfo = Itinera;
 		};
+		AD393C11953C5CDE240F67FC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0E801381335C11FD2D84A208 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1E1601E8A1568DC8DA4D0101;
+			remoteInfo = ItineraWidget;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AD7542B140DAC9BD0FB1BEA0 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				37F0C9A076078B8E2FF2A22D /* ItineraWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0296C4EE5FCABE620F0A80BF /* PreviewFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewFixtures.swift; sourceTree = "<group>"; };
 		03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraApp.swift; sourceTree = "<group>"; };
+		0737D1805334F4FF442200D9 /* PlaceReportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceReportSheet.swift; sourceTree = "<group>"; };
 		0994438A97DF85B7D30A5EAA /* LocationPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPickerSheet.swift; sourceTree = "<group>"; };
+		12F1958AA1F13BBBF245A6B8 /* TripPlatformModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripPlatformModels.swift; sourceTree = "<group>"; };
+		18423052A9D3C3F6B44D4C08 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		1C4495892D389B1EDD27F5C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		2146BDEB6A3A948F16993466 /* TripLibraryOrganizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripLibraryOrganizerTests.swift; sourceTree = "<group>"; };
+		2E98DFB897560E55EC481712 /* TodayTripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayTripView.swift; sourceTree = "<group>"; };
 		2EC031A39B61119A20821D41 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		339E773B2E782533DF6974E2 /* ItineraWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ItineraWidget.entitlements; sourceTree = "<group>"; };
 		34DD1DB233DA698C1A984FE1 /* TripDateRangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripDateRangeTests.swift; sourceTree = "<group>"; };
+		37DC06AD7C913BE453805C99 /* Itinera.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Itinera.entitlements; sourceTree = "<group>"; };
+		37EBE77E1D1A29048D0B526C /* TripDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripDraftTests.swift; sourceTree = "<group>"; };
+		3D91CDFAB0C97AFE38D17244 /* SettingsPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPreferences.swift; sourceTree = "<group>"; };
 		3E87B6096DFB7B5383C31770 /* TripFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripFormView.swift; sourceTree = "<group>"; };
 		48680DD2BF380C9F75FF5CF9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureCredentials.swift; sourceTree = "<group>"; };
+		4E3B642AACD91AF313916898 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		52BAC3F2E900C730779E997F /* NativeTripActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTripActions.swift; sourceTree = "<group>"; };
+		571398FA6F8DDF819B84F5D9 /* CompletedTripCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletedTripCacheTests.swift; sourceTree = "<group>"; };
+		57ABB737429E54DDC9175B8B /* ItineraWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ItineraWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CDA8CC94A84E60BA8803F0F /* ItineraTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraTheme.swift; sourceTree = "<group>"; };
+		6475E1BD8CBBE6C8788B10DA /* ItineraWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraWidgetBundle.swift; sourceTree = "<group>"; };
+		6BF4D2FAD57047B539EA6EEF /* DayRoutePlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayRoutePlanner.swift; sourceTree = "<group>"; };
+		6F13600F66F0D9CDFD5ED093 /* ItineraryPDFExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraryPDFExporterTests.swift; sourceTree = "<group>"; };
 		7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraryView.swift; sourceTree = "<group>"; };
+		7453490B6E4A759459141A88 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		783B9577C40FA7098655E660 /* SelectedLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectedLocation.swift; sourceTree = "<group>"; };
 		7BD9AAFC4187F152468CA3AA /* Itinera.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Itinera.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C58F1204B4D945BE48C7A5A /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		7D4E8C2DEEC175416A7D61FF /* TripEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripEditorView.swift; sourceTree = "<group>"; };
+		82DAB910F09E07E242617418 /* ArchivedTripsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivedTripsView.swift; sourceTree = "<group>"; };
 		856E5D64A9B45958AAB01C0D /* TripDateRange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripDateRange.swift; sourceTree = "<group>"; };
 		8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedTripsView.swift; sourceTree = "<group>"; };
+		87F38461EDBAC5C92D5E9363 /* TripWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripWidgetSnapshot.swift; sourceTree = "<group>"; };
+		8BEC5CEA53644FBCD5F977CA /* TripMutationAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripMutationAPIClientTests.swift; sourceTree = "<group>"; };
 		8C36EEFBC3215BFA5ED68B48 /* PopularItinerariesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopularItinerariesView.swift; sourceTree = "<group>"; };
+		8F03BA3D112B3F056EE2476A /* TripLibraryOrganizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripLibraryOrganizer.swift; sourceTree = "<group>"; };
 		8F68A0FE3ED6CECFFCB9A84B /* GenerationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationView.swift; sourceTree = "<group>"; };
+		912EB590A13249F754F71803 /* TripMutationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripMutationModels.swift; sourceTree = "<group>"; };
 		9502E097B9016F3E58A9EB8F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		9507B7E6467C20F53217A111 /* GoogleMapsURLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleMapsURLBuilder.swift; sourceTree = "<group>"; };
+		9C6982168E23842DA1265C6B /* TripProgressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripProgressStore.swift; sourceTree = "<group>"; };
+		A5488CD6CD01C10548336130 /* TripDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripDraft.swift; sourceTree = "<group>"; };
+		AFC47677A2C72AE38C75FA80 /* TripWidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripWidgetSnapshotTests.swift; sourceTree = "<group>"; };
+		B0887B06F0E059DCE163D611 /* TodayTripViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayTripViewModelTests.swift; sourceTree = "<group>"; };
 		B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfiguration.swift; sourceTree = "<group>"; };
+		B2800E5F529CCD900558032F /* GenerationNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationNotificationManager.swift; sourceTree = "<group>"; };
+		BF80E7E0CD71E4612BD89EBA /* TripLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripLiveActivity.swift; sourceTree = "<group>"; };
 		C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
 		C3669219467A47234FE62F4E /* ItineraTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ItineraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D6A853E4D499C03CCE76E53A /* TripToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripToolsView.swift; sourceTree = "<group>"; };
 		DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingJobStore.swift; sourceTree = "<group>"; };
+		DB4CF0EBB1D7B7711830E577 /* CompletedTripCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletedTripCache.swift; sourceTree = "<group>"; };
+		E06423C680D1FB05A0B7404C /* WeatherAdvisory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherAdvisory.swift; sourceTree = "<group>"; };
+		E0BCCB59EA0E53CC3E7B2EB2 /* NativeTripActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTripActionsTests.swift; sourceTree = "<group>"; };
+		E53CF29CEF5A94AED2FA6403 /* TripProgressStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripProgressStoreTests.swift; sourceTree = "<group>"; };
+		E8AB19446885569E477606A6 /* ItineraryPDFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItineraryPDFExporter.swift; sourceTree = "<group>"; };
+		F229B044C84F6BBA5B4999A0 /* SettingsPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPreferencesTests.swift; sourceTree = "<group>"; };
 		F9ABC6CF87D1728B2AC8001D /* GoogleMapsURLBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleMapsURLBuilderTests.swift; sourceTree = "<group>"; };
+		FB97426EC2FBD28D61019E8F /* TripActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripActivityAttributes.swift; sourceTree = "<group>"; };
 		FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingJobStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		07D6135396A12DB130B79B12 /* ItineraWidget */ = {
+			isa = PBXGroup;
+			children = (
+				4E3B642AACD91AF313916898 /* Info.plist */,
+				339E773B2E782533DF6974E2 /* ItineraWidget.entitlements */,
+				6475E1BD8CBBE6C8788B10DA /* ItineraWidgetBundle.swift */,
+			);
+			path = ItineraWidget;
+			sourceTree = "<group>";
+		};
+		5B469A33446041F6CD829976 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				FB97426EC2FBD28D61019E8F /* TripActivityAttributes.swift */,
+				87F38461EDBAC5C92D5E9363 /* TripWidgetSnapshot.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		A04B7CD36415314D5B3E1031 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				7BD9AAFC4187F152468CA3AA /* Itinera.app */,
 				C3669219467A47234FE62F4E /* ItineraTests.xctest */,
+				57ABB737429E54DDC9175B8B /* ItineraWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -86,6 +200,8 @@
 			children = (
 				E5432C1EE482732AFE785311 /* Itinera */,
 				DD642307D16114A8426B617B /* ItineraTests */,
+				07D6135396A12DB130B79B12 /* ItineraWidget */,
+				5B469A33446041F6CD829976 /* Shared */,
 				A04B7CD36415314D5B3E1031 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -94,9 +210,19 @@
 			isa = PBXGroup;
 			children = (
 				C0C023B6C0A487C9EFACD85E /* APIClientTests.swift */,
+				571398FA6F8DDF819B84F5D9 /* CompletedTripCacheTests.swift */,
 				F9ABC6CF87D1728B2AC8001D /* GoogleMapsURLBuilderTests.swift */,
+				6F13600F66F0D9CDFD5ED093 /* ItineraryPDFExporterTests.swift */,
+				E0BCCB59EA0E53CC3E7B2EB2 /* NativeTripActionsTests.swift */,
 				FCFC2ACEBF887FE4DF263CE0 /* PendingJobStoreTests.swift */,
+				F229B044C84F6BBA5B4999A0 /* SettingsPreferencesTests.swift */,
+				B0887B06F0E059DCE163D611 /* TodayTripViewModelTests.swift */,
 				34DD1DB233DA698C1A984FE1 /* TripDateRangeTests.swift */,
+				37EBE77E1D1A29048D0B526C /* TripDraftTests.swift */,
+				2146BDEB6A3A948F16993466 /* TripLibraryOrganizerTests.swift */,
+				8BEC5CEA53644FBCD5F977CA /* TripMutationAPIClientTests.swift */,
+				E53CF29CEF5A94AED2FA6403 /* TripProgressStoreTests.swift */,
+				AFC47677A2C72AE38C75FA80 /* TripWidgetSnapshotTests.swift */,
 			);
 			path = ItineraTests;
 			sourceTree = "<group>";
@@ -107,23 +233,44 @@
 				7C58F1204B4D945BE48C7A5A /* APIClient.swift */,
 				B10B8FA2CC32271FA7855342 /* APIConfiguration.swift */,
 				48680DD2BF380C9F75FF5CF9 /* AppState.swift */,
+				82DAB910F09E07E242617418 /* ArchivedTripsView.swift */,
 				9502E097B9016F3E58A9EB8F /* Assets.xcassets */,
+				DB4CF0EBB1D7B7711830E577 /* CompletedTripCache.swift */,
+				6BF4D2FAD57047B539EA6EEF /* DayRoutePlanner.swift */,
+				B2800E5F529CCD900558032F /* GenerationNotificationManager.swift */,
 				8F68A0FE3ED6CECFFCB9A84B /* GenerationView.swift */,
 				9507B7E6467C20F53217A111 /* GoogleMapsURLBuilder.swift */,
 				1C4495892D389B1EDD27F5C8 /* Info.plist */,
+				37DC06AD7C913BE453805C99 /* Itinera.entitlements */,
 				03B6183D090EC3A8C6B570B4 /* ItineraApp.swift */,
+				E8AB19446885569E477606A6 /* ItineraryPDFExporter.swift */,
 				7390D9383F9197AC2C08B2F7 /* ItineraryView.swift */,
 				5CDA8CC94A84E60BA8803F0F /* ItineraTheme.swift */,
 				0994438A97DF85B7D30A5EAA /* LocationPickerSheet.swift */,
 				2EC031A39B61119A20821D41 /* Models.swift */,
+				52BAC3F2E900C730779E997F /* NativeTripActions.swift */,
 				DB0169961B9F7EA9D156E92F /* PendingJobStore.swift */,
+				0737D1805334F4FF442200D9 /* PlaceReportSheet.swift */,
 				8C36EEFBC3215BFA5ED68B48 /* PopularItinerariesView.swift */,
 				0296C4EE5FCABE620F0A80BF /* PreviewFixtures.swift */,
+				7453490B6E4A759459141A88 /* PrivacyInfo.xcprivacy */,
 				8772DA9869B1076480DBD6F3 /* SavedTripsView.swift */,
 				4B9C1638DB454AF06BCF4414 /* SecureCredentials.swift */,
 				783B9577C40FA7098655E660 /* SelectedLocation.swift */,
+				3D91CDFAB0C97AFE38D17244 /* SettingsPreferences.swift */,
+				18423052A9D3C3F6B44D4C08 /* SettingsView.swift */,
+				2E98DFB897560E55EC481712 /* TodayTripView.swift */,
 				856E5D64A9B45958AAB01C0D /* TripDateRange.swift */,
+				A5488CD6CD01C10548336130 /* TripDraft.swift */,
+				7D4E8C2DEEC175416A7D61FF /* TripEditorView.swift */,
 				3E87B6096DFB7B5383C31770 /* TripFormView.swift */,
+				8F03BA3D112B3F056EE2476A /* TripLibraryOrganizer.swift */,
+				BF80E7E0CD71E4612BD89EBA /* TripLiveActivity.swift */,
+				912EB590A13249F754F71803 /* TripMutationModels.swift */,
+				12F1958AA1F13BBBF245A6B8 /* TripPlatformModels.swift */,
+				9C6982168E23842DA1265C6B /* TripProgressStore.swift */,
+				D6A853E4D499C03CCE76E53A /* TripToolsView.swift */,
+				E06423C680D1FB05A0B7404C /* WeatherAdvisory.swift */,
 			);
 			path = Itinera;
 			sourceTree = "<group>";
@@ -131,6 +278,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1E1601E8A1568DC8DA4D0101 /* ItineraWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E4DBB29512DF43E66D99B256 /* Build configuration list for PBXNativeTarget "ItineraWidget" */;
+			buildPhases = (
+				33130F3915793AF4B9A73809 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ItineraWidget;
+			packageProductDependencies = (
+			);
+			productName = ItineraWidget;
+			productReference = 57ABB737429E54DDC9175B8B /* ItineraWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		9D8F65B43EBCE03D58381E6D /* Itinera */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5389F40F2E6473C313E10519 /* Build configuration list for PBXNativeTarget "Itinera" */;
@@ -138,10 +302,12 @@
 				0AEAB987F369E527F8D73481 /* Validate Production API URL */,
 				ABE540E4305E402D181BF01C /* Sources */,
 				D7342C60CC9DB2D06935499E /* Resources */,
+				AD7542B140DAC9BD0FB1BEA0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				046489560C2FB13557D12C87 /* PBXTargetDependency */,
 			);
 			name = Itinera;
 			packageProductDependencies = (
@@ -195,6 +361,7 @@
 			targets = (
 				9D8F65B43EBCE03D58381E6D /* Itinera */,
 				A7BAE46697E2E749F67F1D49 /* ItineraTests */,
+				1E1601E8A1568DC8DA4D0101 /* ItineraWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -205,6 +372,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3800A1CB49EE19C496E50354 /* Assets.xcassets in Resources */,
+				0CE6DB02563D8E00F2544884 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -238,9 +406,29 @@
 			buildActionMask = 2147483647;
 			files = (
 				24F3DA2639BB1031E8C5F875 /* APIClientTests.swift in Sources */,
+				3E046E58AB0A03B2F49F241F /* CompletedTripCacheTests.swift in Sources */,
 				1906DF115A3E26922F6A7E96 /* GoogleMapsURLBuilderTests.swift in Sources */,
+				32D1882E91E8C6A587305872 /* ItineraryPDFExporterTests.swift in Sources */,
+				0563E0C4EFFCBC15500BD15C /* NativeTripActionsTests.swift in Sources */,
 				BABC3E599DB3AE0975C04DB4 /* PendingJobStoreTests.swift in Sources */,
+				076564A7F750A2CF5A7B6876 /* SettingsPreferencesTests.swift in Sources */,
+				BED5E83056F7A95731391B42 /* TodayTripViewModelTests.swift in Sources */,
 				DADA70D7EBB4067E5E48509E /* TripDateRangeTests.swift in Sources */,
+				137916A1A7078EE3ACA45DA4 /* TripDraftTests.swift in Sources */,
+				687F5DE8A2C0EB0E0B5E9834 /* TripLibraryOrganizerTests.swift in Sources */,
+				A1160C680EF8F97F06101A4B /* TripMutationAPIClientTests.swift in Sources */,
+				A25A0781CF248DE549245E46 /* TripProgressStoreTests.swift in Sources */,
+				CFED9BED5C2E84A8D8DC6FD2 /* TripWidgetSnapshotTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		33130F3915793AF4B9A73809 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C465910C5C8B07C6D2AA543A /* ItineraWidgetBundle.swift in Sources */,
+				BFEBCB4E8C0230454D04E4C6 /* TripActivityAttributes.swift in Sources */,
+				19E0807859F2236DF7BEE9B2 /* TripWidgetSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,27 +439,53 @@
 				7718CA28C77239D42DAAACCD /* APIClient.swift in Sources */,
 				9D8626E6494FCED9D4C45F59 /* APIConfiguration.swift in Sources */,
 				63FED0414A5DE5E0B5CBDDC4 /* AppState.swift in Sources */,
+				67E05C4C977A18CB32431D87 /* ArchivedTripsView.swift in Sources */,
+				C98CE7743F8F88BB045D1A0F /* CompletedTripCache.swift in Sources */,
+				75538FFC3AE839D62B801088 /* DayRoutePlanner.swift in Sources */,
+				39AE1A47AB0206C851CD7039 /* GenerationNotificationManager.swift in Sources */,
 				0A29C2E47BA444886B1B7187 /* GenerationView.swift in Sources */,
 				92D92B9DF67FB86788908B38 /* GoogleMapsURLBuilder.swift in Sources */,
 				129C98C2579C2DE6559E4874 /* ItineraApp.swift in Sources */,
 				D91C42D8CCF79EF8B5863FC0 /* ItineraTheme.swift in Sources */,
+				361F25734B3CF0FE60020687 /* ItineraryPDFExporter.swift in Sources */,
 				9AF5EC81A475C65CC22C5A37 /* ItineraryView.swift in Sources */,
 				702D42180E9510CAC94B9779 /* LocationPickerSheet.swift in Sources */,
 				2160DFF33C6BB78A6340857F /* Models.swift in Sources */,
+				006B6170827DDE5E53902D8E /* NativeTripActions.swift in Sources */,
 				DBD77BC4DA7FC34535493E1D /* PendingJobStore.swift in Sources */,
+				4DB5C6EA685485071F2B2CA2 /* PlaceReportSheet.swift in Sources */,
 				541E2891AB5EDD8282ED0F99 /* PopularItinerariesView.swift in Sources */,
 				D19D1A7C31E3A4CCFFB69F13 /* PreviewFixtures.swift in Sources */,
 				101BD41497CB02287481CE9A /* SavedTripsView.swift in Sources */,
 				5509C9200D2AE0EBFA7E7FF3 /* SecureCredentials.swift in Sources */,
 				78DE2D31CBC2760900FD5328 /* SelectedLocation.swift in Sources */,
+				BE53A594D998A30B9B1E67FB /* SettingsPreferences.swift in Sources */,
+				B4482F387EFAC2760071C5D4 /* SettingsView.swift in Sources */,
+				3B06E25446733AF8AFC9C7B9 /* TodayTripView.swift in Sources */,
+				E2345820FAC403B39BCF23AC /* TripActivityAttributes.swift in Sources */,
 				04EFE53892EB1DC230720D3B /* TripDateRange.swift in Sources */,
+				91D7EF3DD16EB83697AB6F39 /* TripDraft.swift in Sources */,
+				60B856C9CCDA9D95EFF28673 /* TripEditorView.swift in Sources */,
 				614C9D1DAEC7C550A3A5AB76 /* TripFormView.swift in Sources */,
+				763FBB744AF24A9FA98EBA74 /* TripLibraryOrganizer.swift in Sources */,
+				B07CDE1B0EA9DA0EDC3DA2DA /* TripLiveActivity.swift in Sources */,
+				2C1F47776F564ECFAE18568A /* TripMutationModels.swift in Sources */,
+				F8FA2089F1B3851F6C94F4D7 /* TripPlatformModels.swift in Sources */,
+				9900DA290219DA54796D800D /* TripProgressStore.swift in Sources */,
+				4DFE21DD531FB4F080E6CB73 /* TripToolsView.swift in Sources */,
+				4A76722688CBC3D72255BA9E /* TripWidgetSnapshot.swift in Sources */,
+				7B2D8AF32D4369935B7EBABA /* WeatherAdvisory.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		046489560C2FB13557D12C87 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1E1601E8A1568DC8DA4D0101 /* ItineraWidget */;
+			targetProxy = AD393C11953C5CDE240F67FC /* PBXContainerItemProxy */;
+		};
 		C5103C24014027E34CE49483 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 9D8F65B43EBCE03D58381E6D /* Itinera */;
@@ -297,6 +511,24 @@
 			};
 			name = Release;
 		};
+		2126978EE1ADABCDBE7A4680 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ItineraWidget/ItineraWidget.entitlements;
+				INFOPLIST_FILE = ItineraWidget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.itinera.app.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		3DE8E6D43ABC1C810E526974 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -318,6 +550,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Itinera/Itinera.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = "Itinera/Info-Debug.plist";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -335,6 +568,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Itinera/Itinera.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Itinera/Info.plist;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -475,6 +709,24 @@
 			};
 			name = Release;
 		};
+		C80CAFD3E54966143CE035DE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ItineraWidget/ItineraWidget.entitlements;
+				INFOPLIST_FILE = ItineraWidget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.itinera.app.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -501,6 +753,15 @@
 			buildConfigurations = (
 				40B3FCFC01F634F6B6B0C0DC /* Debug */,
 				9EAE5FE1DB16049890902B44 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E4DBB29512DF43E66D99B256 /* Build configuration list for PBXNativeTarget "ItineraWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2126978EE1ADABCDBE7A4680 /* Debug */,
+				C80CAFD3E54966143CE035DE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

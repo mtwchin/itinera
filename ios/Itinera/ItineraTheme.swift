@@ -7,13 +7,13 @@ enum ItineraAesthetic: String, CaseIterable {
     case signal
 
     static var selected: ItineraAesthetic {
-        guard
-            let value = ProcessInfo.processInfo.environment["ITINERA_THEME"]?.lowercased(),
-            let aesthetic = ItineraAesthetic(rawValue: value)
-        else {
-            return .atlas
-        }
-        return aesthetic
+        environmentOverride ?? .atlas
+    }
+
+    static var environmentOverride: ItineraAesthetic? {
+        ProcessInfo.processInfo.environment["ITINERA_THEME"]
+            .map { $0.lowercased() }
+            .flatMap(ItineraAesthetic.init(rawValue:))
     }
 
     var theme: ItineraTheme {
@@ -23,6 +23,7 @@ enum ItineraAesthetic: String, CaseIterable {
         case .signal: return .signal
         }
     }
+
 }
 
 struct ItineraTheme {
@@ -45,6 +46,16 @@ struct ItineraTheme {
     let shadow: Color
     let cornerRadius: CGFloat
     let preferredColorScheme: ColorScheme
+
+    static func resolved(
+        for colorScheme: ColorScheme,
+        aestheticOverride: ItineraAesthetic?
+    ) -> ItineraTheme {
+        if let aestheticOverride {
+            return aestheticOverride.theme
+        }
+        return colorScheme == .dark ? .signal : .atlas
+    }
 
     static let atlas = ItineraTheme(
         name: "Atlas Field Notes",

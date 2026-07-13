@@ -16,16 +16,36 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from backend.config import get_settings
-from backend.db.models import Itinerary, JobStatus, OutboxEvent, PublicItinerary
+from backend.db.models import (
+    ChecklistItem,
+    CollaborationInvite,
+    Itinerary,
+    ItineraryRevision,
+    JobStatus,
+    OutboxEvent,
+    PublicItinerary,
+    TripCollaborator,
+    User,
+)
 
 
 class IdempotencyConflictError(Exception):
+    pass
+
+
+class ItineraryVersionConflictError(Exception):
+    def __init__(self, current_version: int) -> None:
+        super().__init__("Itinerary was changed by another request")
+        self.current_version = current_version
+
+
+class InvalidRevisionError(Exception):
     pass
 
 
@@ -69,6 +89,55 @@ def canonical_request_hash(request: dict) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def materialize_activity_ids(
+    result: dict | None,
+    *,
+    trip_namespace: str,
+    force_reissue: bool = False,
+) -> dict | None:
+    """Issue deterministic, trip-scoped stop IDs.
+
+    Existing IDs remain stable during ordinary reads and revisions. Creation
+    boundaries such as worker completion, Popular saves, and duplication can
+    force a fresh set so copied provider/place IDs never become stop IDs shared
+    by multiple trips.
+    """
+
+    if result is None:
+        return None
+    normalized_namespace = trip_namespace.strip()
+    if not normalized_namespace:
+        raise ValueError("trip_namespace must not be blank")
+    trip_id_namespace = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"itinera:trip:{normalized_namespace}",
+    )
+    for day_index, day in enumerate(result.get("itinerary", [])):
+        for activity_index, activity in enumerate(day.get("activities", [])):
+            if activity.get("id") and not force_reissue:
+                continue
+            coordinates = activity.get("coordinates") or {}
+            identity = json.dumps(
+                {
+                    "day_index": day_index,
+                    "day": day.get("day"),
+                    "date": day.get("date"),
+                    "activity_index": activity_index,
+                    "place_id": activity.get("place_id"),
+                    "source": activity.get("source"),
+                    "name": activity.get("name"),
+                    "address": activity.get("address"),
+                    "lat": coordinates.get("lat"),
+                    "lng": coordinates.get("lng"),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            activity["id"] = str(uuid.uuid5(trip_id_namespace, identity))
+    return result
 
 
 def _assert_matching_request(row: Itinerary, request_hash: str) -> None:
@@ -142,13 +211,17 @@ async def create_or_replay_job(
 
 
 async def list_itineraries(
-    session: AsyncSession, user_id: uuid.UUID, limit: int = 50
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    limit: int = 50,
+    *,
+    include_archived: bool = False,
 ) -> list[Itinerary]:
+    statement = select(Itinerary).where(Itinerary.user_id == user_id)
+    if not include_archived:
+        statement = statement.where(Itinerary.archived_at.is_(None))
     result = await session.execute(
-        select(Itinerary)
-        .where(Itinerary.user_id == user_id)
-        .order_by(Itinerary.created_at.desc())
-        .limit(limit)
+        statement.order_by(Itinerary.created_at.desc()).limit(limit)
     )
     return list(result.scalars())
 
@@ -162,6 +235,473 @@ async def get_itinerary_by_job_for_user(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_itinerary_with_access(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    user_id: uuid.UUID,
+    require_owner: bool = False,
+    require_edit: bool = False,
+    for_update: bool = False,
+) -> Itinerary | None:
+    """Fetch a trip without revealing whether a denied trip exists."""
+
+    statement = select(Itinerary)
+    if require_owner:
+        statement = statement.where(
+            Itinerary.job_id == job_id, Itinerary.user_id == user_id
+        )
+    else:
+        collaborator_role = (
+            TripCollaborator.role == "editor"
+            if require_edit
+            else TripCollaborator.role.in_(("viewer", "editor"))
+        )
+        statement = statement.outerjoin(
+            TripCollaborator,
+            and_(
+                TripCollaborator.itinerary_id == Itinerary.id,
+                TripCollaborator.user_id == user_id,
+            ),
+        ).where(
+            Itinerary.job_id == job_id,
+            or_(
+                Itinerary.user_id == user_id,
+                and_(
+                    TripCollaborator.user_id == user_id,
+                    collaborator_role,
+                ),
+            ),
+        )
+    if for_update:
+        statement = statement.with_for_update(of=Itinerary)
+    result = await session.execute(statement)
+    return result.scalar_one_or_none()
+
+
+async def update_owned_itinerary(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    user_id: uuid.UUID,
+    title: str | None,
+    archived: bool | None,
+) -> Itinerary | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_owner=True,
+        for_update=True,
+    )
+    if row is None:
+        return None
+    if title is not None:
+        row.title = title
+    if archived is not None:
+        row.archived_at = _utcnow() if archived else None
+    row.updated_at = _utcnow()
+    return row
+
+
+async def delete_owned_itinerary(
+    session: AsyncSession, *, job_id: str, user_id: uuid.UUID
+) -> bool:
+    result = await session.execute(
+        delete(Itinerary).where(
+            Itinerary.job_id == job_id, Itinerary.user_id == user_id
+        )
+    )
+    return result.rowcount == 1
+
+
+async def duplicate_owned_itinerary(
+    session: AsyncSession, *, job_id: str, user_id: uuid.UUID
+) -> Itinerary | None:
+    source = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_owner=True,
+        for_update=True,
+    )
+    if source is None:
+        return None
+    if source.status != JobStatus.succeeded or source.result is None:
+        raise InvalidRevisionError("Only completed itineraries can be duplicated")
+    request = copy.deepcopy(source.request)
+    request.pop("source", None)
+    title = source.title or request.get("title")
+    if title:
+        title = f"Copy of {title}"[:160]
+        request["title"] = title
+    duplicate_job_id = uuid.uuid4().hex
+    duplicate = Itinerary(
+        user_id=user_id,
+        job_id=duplicate_job_id,
+        status=source.status,
+        request=request,
+        request_hash=canonical_request_hash(request),
+        result=materialize_activity_ids(
+            copy.deepcopy(source.result),
+            trip_namespace=duplicate_job_id,
+            force_reissue=True,
+        ),
+        error=source.error,
+        title=title,
+        version=1,
+        duplicated_from_id=source.id,
+    )
+    session.add(duplicate)
+    await session.flush()
+    return duplicate
+
+
+def _day_for_number(result: dict, day_number: int) -> dict:
+    days = result.get("itinerary")
+    if not isinstance(days, list):
+        raise InvalidRevisionError("Itinerary result has no editable days")
+    day = next(
+        (candidate for candidate in days if candidate.get("day") == day_number), None
+    )
+    if day is None:
+        raise InvalidRevisionError(f"Day {day_number} does not exist")
+    if not isinstance(day.get("activities"), list):
+        raise InvalidRevisionError(f"Day {day_number} has no editable activities")
+    return day
+
+
+def apply_itinerary_operations(result: dict, operations: list[dict]) -> dict:
+    """Apply a validated edit batch atomically to a detached itinerary copy."""
+
+    edited = copy.deepcopy(result)
+    for operation in operations:
+        operation_type = operation["type"]
+        day = _day_for_number(edited, operation["day"])
+        activities = day["activities"]
+        if operation_type == "add_activity":
+            position = operation.get("position")
+            if position is None:
+                position = len(activities)
+            if position > len(activities):
+                raise InvalidRevisionError("Activity insertion position is out of range")
+            activities.insert(position, copy.deepcopy(operation["activity"]))
+        elif operation_type == "remove_activity":
+            index = operation["activity_index"]
+            if index >= len(activities):
+                raise InvalidRevisionError("Activity index is out of range")
+            activities.pop(index)
+        elif operation_type == "reorder_activity":
+            source_index = operation["from_index"]
+            destination_index = operation["to_index"]
+            if source_index >= len(activities) or destination_index >= len(activities):
+                raise InvalidRevisionError("Activity index is out of range")
+            activities.insert(destination_index, activities.pop(source_index))
+        elif operation_type == "replace_activity":
+            index = operation["activity_index"]
+            if index >= len(activities):
+                raise InvalidRevisionError("Activity index is out of range")
+            activities[index] = copy.deepcopy(operation["activity"])
+        elif operation_type == "regenerate_day":
+            day["theme"] = operation["theme"]
+            day["activities"] = copy.deepcopy(operation["activities"])
+        else:
+            raise InvalidRevisionError(f"Unsupported operation: {operation_type}")
+    return edited
+
+
+async def revise_itinerary(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    user_id: uuid.UUID,
+    expected_version: int,
+    operations: list[dict],
+) -> tuple[Itinerary, ItineraryRevision] | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_edit=True,
+        for_update=True,
+    )
+    if row is None:
+        return None
+    current_version = row.version or 1
+    if current_version != expected_version:
+        raise ItineraryVersionConflictError(current_version)
+    if row.status != JobStatus.succeeded or row.result is None:
+        raise InvalidRevisionError("Only completed itineraries can be revised")
+
+    materialize_activity_ids(row.result, trip_namespace=row.job_id)
+    updated_result = apply_itinerary_operations(row.result, operations)
+    materialize_activity_ids(updated_result, trip_namespace=row.job_id)
+    revision = ItineraryRevision(
+        itinerary_id=row.id,
+        actor_user_id=user_id,
+        from_version=current_version,
+        to_version=current_version + 1,
+        operations=copy.deepcopy(operations),
+        result=copy.deepcopy(updated_result),
+    )
+    row.result = updated_result
+    row.version = current_version + 1
+    row.updated_at = _utcnow()
+    session.add(revision)
+    await session.flush()
+    return row, revision
+
+
+async def list_itinerary_revisions(
+    session: AsyncSession, *, job_id: str, user_id: uuid.UUID
+) -> tuple[Itinerary, list[ItineraryRevision]] | None:
+    row = await get_itinerary_with_access(
+        session, job_id=job_id, user_id=user_id
+    )
+    if row is None:
+        return None
+    result = await session.execute(
+        select(ItineraryRevision)
+        .where(ItineraryRevision.itinerary_id == row.id)
+        .order_by(ItineraryRevision.to_version.desc())
+    )
+    return row, list(result.scalars())
+
+
+async def list_trip_records(
+    session: AsyncSession,
+    *,
+    model,
+    job_id: str,
+    user_id: uuid.UUID,
+    require_edit: bool = False,
+) -> tuple[Itinerary, list] | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_edit=require_edit,
+    )
+    if row is None:
+        return None
+    result = await session.execute(
+        select(model)
+        .where(model.itinerary_id == row.id)
+        .order_by(model.created_at.asc())
+    )
+    return row, list(result.scalars())
+
+
+async def create_trip_record(
+    session: AsyncSession,
+    *,
+    model,
+    job_id: str,
+    user_id: uuid.UUID,
+    values: dict,
+    require_edit: bool = True,
+) -> object | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_edit=require_edit,
+    )
+    if row is None:
+        return None
+    record = model(itinerary_id=row.id, **values)
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def update_checklist_item(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    item_id: uuid.UUID,
+    user_id: uuid.UUID,
+    changes: dict,
+) -> ChecklistItem | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_edit=True,
+    )
+    if row is None:
+        return None
+    item = (
+        await session.execute(
+            select(ChecklistItem).where(
+                ChecklistItem.id == item_id,
+                ChecklistItem.itinerary_id == row.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        return None
+    for key, value in changes.items():
+        setattr(item, key, value)
+    item.updated_at = _utcnow()
+    return item
+
+
+async def delete_trip_record(
+    session: AsyncSession,
+    *,
+    model,
+    job_id: str,
+    record_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_edit=True,
+    )
+    if row is None:
+        return False
+    result = await session.execute(
+        delete(model).where(model.id == record_id, model.itinerary_id == row.id)
+    )
+    return result.rowcount == 1
+
+
+async def create_collaboration_invite(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    user_id: uuid.UUID,
+    email: str | None,
+    role: str,
+    expires_at: datetime,
+    token_hash: str,
+) -> CollaborationInvite | None:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_owner=True,
+    )
+    if row is None:
+        return None
+    invite = CollaborationInvite(
+        itinerary_id=row.id,
+        invited_by_user_id=user_id,
+        email=email,
+        role=role,
+        expires_at=expires_at,
+        token_hash=token_hash,
+    )
+    session.add(invite)
+    await session.flush()
+    return invite
+
+
+async def revoke_collaboration_invite(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    invite_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_owner=True,
+    )
+    if row is None:
+        return False
+    result = await session.execute(
+        update(CollaborationInvite)
+        .where(
+            CollaborationInvite.id == invite_id,
+            CollaborationInvite.itinerary_id == row.id,
+            CollaborationInvite.accepted_at.is_(None),
+            CollaborationInvite.revoked_at.is_(None),
+        )
+        .values(revoked_at=_utcnow())
+    )
+    return result.rowcount == 1
+
+
+async def remove_trip_collaborator(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    collaborator_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    row = await get_itinerary_with_access(
+        session,
+        job_id=job_id,
+        user_id=user_id,
+        require_owner=True,
+    )
+    if row is None:
+        return False
+    result = await session.execute(
+        delete(TripCollaborator).where(
+            TripCollaborator.id == collaborator_id,
+            TripCollaborator.itinerary_id == row.id,
+        )
+    )
+    return result.rowcount == 1
+
+
+async def accept_collaboration_invite(
+    session: AsyncSession,
+    *,
+    token_hash: str,
+    user: User,
+) -> TripCollaborator | None:
+    now = _utcnow()
+    invite = (
+        await session.execute(
+            select(CollaborationInvite)
+            .where(
+                CollaborationInvite.token_hash == token_hash,
+                CollaborationInvite.accepted_at.is_(None),
+                CollaborationInvite.revoked_at.is_(None),
+                CollaborationInvite.expires_at > now,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if invite is None:
+        return None
+    if invite.email is not None and (
+        user.email is None or invite.email.casefold() != user.email.casefold()
+    ):
+        return None
+    existing = (
+        await session.execute(
+            select(TripCollaborator).where(
+                TripCollaborator.itinerary_id == invite.itinerary_id,
+                TripCollaborator.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        existing = TripCollaborator(
+            itinerary_id=invite.itinerary_id,
+            user_id=user.id,
+            role=invite.role,
+        )
+        session.add(existing)
+    invite.accepted_at = now
+    await session.flush()
+    return existing
+
+
+async def delete_user_data(session: AsyncSession, *, user: User) -> None:
+    await session.delete(user)
+    await session.flush()
 
 
 def _public_save_counts():
@@ -352,13 +892,18 @@ async def save_public_itinerary_for_user(
         "title": public_row.title,
         "source": "public_catalog",
     }
+    saved_job_id = uuid.uuid4().hex
     saved = Itinerary(
-        job_id=uuid.uuid4().hex,
+        job_id=saved_job_id,
         user_id=user_id,
         status=JobStatus.succeeded,
         request=request,
         request_hash=canonical_request_hash(request),
-        result=copy.deepcopy(public_row.result),
+        result=materialize_activity_ids(
+            copy.deepcopy(public_row.result),
+            trip_namespace=saved_job_id,
+            force_reissue=True,
+        ),
         source_public_itinerary_id=public_row.id,
     )
     try:
@@ -519,7 +1064,11 @@ def finish_job_sync(
             job_id=job_id,
             run_token=run_token,
             status=status,
-            result=result,
+            result=materialize_activity_ids(
+                result,
+                trip_namespace=job_id,
+                force_reissue=True,
+            ),
             error=error,
         )
     )
