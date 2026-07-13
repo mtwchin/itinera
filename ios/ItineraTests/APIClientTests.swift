@@ -42,6 +42,22 @@ final class APIClientTests: XCTestCase {
                 let body = try XCTUnwrap(request.bodyData)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(json["arrival_date"] as? String, "2026-08-01")
+                XCTAssertEqual(
+                    json["transportation_modes"] as? [String],
+                    ["Walking", "Transit"]
+                )
+                XCTAssertEqual(
+                    json["accessibility_categories"] as? [String],
+                    ["Step-free routes", "Limited walking"]
+                )
+                let reservations = try XCTUnwrap(
+                    json["fixed_reservations"] as? [[String: Any]]
+                )
+                XCTAssertEqual(reservations.first?["title"] as? String, "Museum entry")
+                let unavailable = try XCTUnwrap(
+                    json["unavailable_times"] as? [[String: Any]]
+                )
+                XCTAssertEqual(unavailable.first?["starts_at"] as? String, "13:00")
                 return .json(
                     statusCode: 202,
                     body: """
@@ -58,7 +74,24 @@ final class APIClientTests: XCTestCase {
             }
         }
 
-        let accepted = try await client.createItinerary(sampleRequest, idempotencyKey: idempotencyKey)
+        var request = sampleRequest
+        request.transportationModes = ["Walking", "Transit"]
+        request.accessibilityCategories = ["Step-free routes", "Limited walking"]
+        request.fixedReservations = [
+            FixedReservationInput(
+                title: "Museum entry",
+                startsAt: "2026-08-02T10:00:00+01:00",
+                endsAt: "2026-08-02T11:00:00+01:00"
+            )
+        ]
+        request.unavailableTimes = [
+            UnavailableTimeInput(
+                date: "2026-08-03",
+                startsAt: "13:00",
+                endsAt: "15:00"
+            )
+        ]
+        let accepted = try await client.createItinerary(request, idempotencyKey: idempotencyKey)
         XCTAssertEqual(accepted.jobId, "job-123")
         let stored = await credentialStore.loadCredentials()
         XCTAssertEqual(stored?.refreshToken, "refresh-1")
@@ -308,6 +341,8 @@ final class APIClientTests: XCTestCase {
                     "departure_date": null,
                     "result": null,
                     "error": null,
+                    "archived_at": null,
+                    "version": 1,
                     "created_at": "2026-07-12T12:00:00Z"
                   }
                 }
@@ -324,6 +359,42 @@ final class APIClientTests: XCTestCase {
             response.savedItinerary.sourcePublicItineraryId,
             "11111111-2222-3333-4444-555555555555"
         )
+    }
+
+    func testLegacyTripResponsesDefaultMissingVersionToOne() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let saved = try decoder.decode(
+            SavedItinerary.self,
+            from: Data(
+                """
+                {
+                  "job_id": "legacy-trip",
+                  "status": "succeeded",
+                  "title": "Legacy Lisbon",
+                  "created_at": "2026-01-01T00:00:00Z"
+                }
+                """.utf8
+            )
+        )
+        let status = try decoder.decode(
+            JobStatusResponse.self,
+            from: Data(
+                """
+                {
+                  "job_id": "legacy-trip",
+                  "status": "running",
+                  "result": null,
+                  "error": null
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(saved.version, 1)
+        XCTAssertNil(saved.archivedAt)
+        XCTAssertEqual(status.version, 1)
     }
 
     func testPollingDelayIsExponentiallyBoundedAndJittered() {

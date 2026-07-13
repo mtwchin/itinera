@@ -73,6 +73,86 @@ final class PendingJobStoreTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
+    func testLegacyPendingSubmissionDefaultsNewPlanningFields() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let fileURL = root.appending(path: "pending-submissions.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            [
+              {
+                "idempotencyKey": "11111111-2222-3333-4444-555555555555",
+                "request": {
+                  "city": "Lisbon",
+                  "country": "Portugal",
+                  "accommodation": {
+                    "address": "Rua Augusta",
+                    "lat": 38.7,
+                    "lng": -9.1
+                  },
+                  "arrivalDate": "2026-08-01",
+                  "departureDate": "2026-08-04",
+                  "groupSize": 2,
+                  "wakeUpTime": "08:00",
+                  "foodPreferences": null,
+                  "mustDo": null,
+                  "budget": "Medium"
+                },
+                "title": "Lisbon, Portugal",
+                "createdAt": "2026-01-01T00:00:00Z"
+              }
+            ]
+            """.utf8
+        ).write(to: fileURL, options: [.atomic])
+
+        let store = PendingSubmissionStore(fileURL: fileURL)
+        let legacyRecords = try await store.all()
+        let record = try XCTUnwrap(legacyRecords.first)
+
+        XCTAssertEqual(record.request.pace, "Balanced")
+        XCTAssertEqual(
+            record.request.transportationModes,
+            ["Walking", "Transit", "Driving"]
+        )
+        XCTAssertFalse(record.request.travelingWithChildren)
+        XCTAssertTrue(record.request.interests.isEmpty)
+        XCTAssertNil(record.request.accessibilityNeeds)
+        XCTAssertTrue(record.request.fixedReservations.isEmpty)
+        XCTAssertTrue(record.request.unavailableTimes.isEmpty)
+        XCTAssertNil(record.request.timezone)
+
+        try await store.removeAll()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        let recordsAfterRemoval = try await store.all()
+        XCTAssertTrue(recordsAfterRemoval.isEmpty)
+    }
+
+    func testLegacySingleTransportationPreferenceBecomesChecklistSelection() throws {
+        let data = Data(
+            """
+            {
+              "city": "Lisbon",
+              "country": "Portugal",
+              "accommodation": {"address": "Rua Augusta", "lat": 38.7, "lng": -9.1},
+              "arrivalDate": "2026-08-01",
+              "departureDate": "2026-08-04",
+              "groupSize": 2,
+              "wakeUpTime": "08:00",
+              "budget": "Medium",
+              "transportationPreference": "Transit"
+            }
+            """.utf8
+        )
+
+        let request = try JSONDecoder().decode(GenerateItineraryRequest.self, from: data)
+        XCTAssertEqual(request.transportationModes, ["Transit"])
+    }
+
     private var sampleRequest: GenerateItineraryRequest {
         GenerateItineraryRequest(
             city: "Lisbon",

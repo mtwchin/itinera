@@ -18,7 +18,7 @@ from backend.db.repo import (
     PopularItineraryListing,
     create_or_replay_job,
     get_popular_itinerary,
-    get_itinerary_by_job_for_user,
+    get_itinerary_with_access,
     list_popular_itineraries,
     list_popular_itinerary_locations,
     list_itineraries,
@@ -52,10 +52,12 @@ def _job_urls(job_id: str) -> tuple[str, str]:
     return f"{base}/stream", base
 
 
-async def _owned_job_or_404(
+async def _accessible_job_or_404(
     session: AsyncSession, *, job_id: str, user_id: uuid.UUID
 ) -> Itinerary:
-    row = await get_itinerary_by_job_for_user(session, job_id, user_id)
+    row = await get_itinerary_with_access(
+        session, job_id=job_id, user_id=user_id
+    )
     if row is None:
         # Deliberately does not reveal whether another user owns this job ID.
         raise HTTPException(
@@ -70,6 +72,7 @@ def _status_from_row(row: Itinerary) -> JobStatusResponse:
         status=row.status.value,
         result=row.result,
         error=row.error,
+        version=row.version or 1,
     )
 
 
@@ -142,8 +145,14 @@ async def create_itinerary(
 async def list_saved_itineraries(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
+    include_archived: bool = Query(default=False),
 ) -> list[SavedItinerary]:
-    rows = await list_itineraries(session, user.id)
+    if include_archived:
+        rows = await list_itineraries(
+            session, user.id, include_archived=True
+        )
+    else:
+        rows = await list_itineraries(session, user.id)
     return [SavedItinerary.from_row(row) for row in rows]
 
 
@@ -253,9 +262,9 @@ async def get_itinerary(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> JobStatusResponse:
-    row = await _owned_job_or_404(session, job_id=job_id, user_id=user.id)
+    row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
 
-    # PostgreSQL is checked first to authorize ownership. Redis is only a
+    # PostgreSQL is checked first to authorize owner/collaborator access. Redis is only a
     # response cache and can never grant access to a job.
     try:
         raw = await get_redis().get(_result_key(job_id))
@@ -277,7 +286,7 @@ async def stream_itinerary(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
-    row = await _owned_job_or_404(session, job_id=job_id, user_id=user.id)
+    row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
     initial = _status_from_row(row).model_dump(mode="json")
     return StreamingResponse(
         _event_source(job_id, initial),

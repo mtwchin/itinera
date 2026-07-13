@@ -142,6 +142,27 @@ async def create_guest_session(
     return user, raw_token
 
 
+async def create_session_for_user(
+    session: AsyncSession,
+    user: User,
+    *,
+    settings: Settings | None = None,
+) -> tuple[User, str]:
+    settings = settings or get_settings()
+    now = _now()
+    raw_token = generate_refresh_token()
+    session.add(
+        GuestRefreshToken(
+            user_id=user.id,
+            family_id=uuid.uuid4(),
+            token_hash=hash_refresh_token(raw_token),
+            expires_at=now + timedelta(seconds=settings.auth_refresh_token_ttl_seconds),
+        )
+    )
+    await session.flush()
+    return user, raw_token
+
+
 async def rotate_guest_refresh_token(
     session: AsyncSession,
     raw_token: str,

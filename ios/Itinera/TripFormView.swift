@@ -3,7 +3,9 @@ import SwiftUI
 
 struct TripFormView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @Environment(\.itineraTheme) private var theme
+    @AppStorage(ItineraLocalDataKeys.tripDraft) private var savedDraftData = Data()
 
     @State private var destinationQuery = ""
     @State private var destination: SelectedLocation?
@@ -16,12 +18,36 @@ struct TripFormView: View {
     @State private var foodPreferences = ""
     @State private var mustDo = ""
     @State private var budget = "Medium"
+    @State private var pace = "Balanced"
+    @State private var transportationPreferences = Set(TripTransportationOption.allCases)
+    @State private var travelingWithChildren = false
+    @State private var interestCategories = Set<TripInterestCategory>()
+    @State private var accessibilityCategories = Set<TripAccessibilityCategory>()
+    @State private var scheduleConstraints: [TripScheduleConstraint] = []
+    @State private var scheduleKind: TripScheduleConstraint.Kind = .freeTime
+    @State private var scheduleDate = Date()
+    @State private var scheduleStartsAt = Calendar.current.date(
+        bySettingHour: 9,
+        minute: 0,
+        second: 0,
+        of: Date()
+    ) ?? Date()
+    @State private var scheduleEndsAt = Calendar.current.date(
+        bySettingHour: 10,
+        minute: 0,
+        second: 0,
+        of: Date()
+    ) ?? Date()
+    @State private var scheduleTitle = ""
+    @State private var scheduleAddress = ""
+    @State private var scheduleValidationMessage: String?
     @State private var preferencesExpanded = false
     @State private var activeLocationPicker: LocationPickerPurpose?
     @State private var isShowingDatePicker = false
     @State private var pendingJob: PendingJob?
     @State private var errorMessage: String?
     @State private var isSubmitting = false
+    @State private var isShowingAIDataDisclosure = false
 
     struct PendingJob: Identifiable, Hashable {
         let id: String
@@ -90,6 +116,20 @@ struct TripFormView: View {
             .sheet(isPresented: $isShowingDatePicker) {
                 TripDateRangePickerSheet(start: $arrival, end: $departure)
             }
+            .sheet(isPresented: $isShowingAIDataDisclosure) {
+                NavigationStack {
+                    AIDataDisclosureView(
+                        disclosure: .current,
+                        hasConsent: settingsPreferences.hasCurrentAIDataConsent,
+                        onAccept: {
+                            settingsPreferences.acceptCurrentAIDataConsent()
+                            submit()
+                        },
+                        onWithdraw: settingsPreferences.withdrawAIDataConsent
+                    )
+                }
+                .environment(\.itineraTheme, theme)
+            }
             .onChange(of: destinationQuery) { _, newValue in
                 if let destination, newValue != destination.destinationInputLabel {
                     self.destination = nil
@@ -101,7 +141,76 @@ struct TripFormView: View {
                     self.homeBase = nil
                 }
             }
+            .onChange(of: arrival) { _, _ in
+                clampScheduleDateToTrip()
+                discardScheduleConstraintsOutsideTrip()
+            }
+            .onChange(of: departure) { _, _ in
+                clampScheduleDateToTrip()
+                discardScheduleConstraintsOutsideTrip()
+            }
+            .onAppear(perform: restoreDraft)
+            .onChange(of: draftSnapshot) { _, draft in
+                if let encoded = TripDraftCodec.encode(draft) {
+                    savedDraftData = encoded
+                }
+            }
         }
+    }
+
+    private var draftSnapshot: TripDraft {
+        TripDraft(
+            destinationQuery: destinationQuery,
+            destination: destination,
+            homeBaseQuery: homeBaseQuery,
+            homeBase: homeBase,
+            arrival: arrival,
+            departure: departure,
+            groupSize: groupSize,
+            wakeUpTime: wakeUpTime,
+            foodPreferences: foodPreferences,
+            mustDo: mustDo,
+            budget: budget,
+            pace: pace,
+            transportationPreference: transportationDraftValue,
+            travelingWithChildren: travelingWithChildren,
+            interests: selectedInterestValues.joined(separator: ","),
+            accessibilityNeeds: selectedAccessibilityValues.joined(separator: ","),
+            fixedReservations: "",
+            unavailableTimes: "",
+            scheduleConstraints: scheduleConstraints
+        )
+    }
+
+    private func restoreDraft() {
+        guard let draft = TripDraftCodec.decode(savedDraftData) else { return }
+        destination = draft.destination
+        destinationQuery = draft.destinationQuery
+        homeBase = draft.homeBase
+        homeBaseQuery = draft.homeBaseQuery
+        arrival = max(draft.arrival, Calendar.current.startOfDay(for: Date()))
+        departure = max(
+            draft.departure,
+            Calendar.current.date(byAdding: .day, value: 1, to: arrival) ?? arrival
+        )
+        groupSize = draft.groupSize
+        wakeUpTime = draft.wakeUpTime
+        foodPreferences = draft.foodPreferences
+        mustDo = draft.mustDo
+        budget = draft.budget
+        pace = draft.pace
+        transportationPreferences = TripTransportationOption.selection(
+            fromStoredValue: draft.transportationPreference
+        )
+        travelingWithChildren = draft.travelingWithChildren
+        interestCategories = TripInterestCategory.selection(
+            fromStoredValue: draft.interests
+        )
+        accessibilityCategories = TripAccessibilityCategory.selection(
+            fromStoredValue: draft.accessibilityNeeds
+        )
+        scheduleConstraints = draft.scheduleConstraints ?? []
+        clampScheduleDateToTrip()
     }
 
     private var primaryActionBar: some View {
@@ -110,7 +219,7 @@ struct TripFormView: View {
                 .fill(theme.border.opacity(0.55))
                 .frame(height: 1)
 
-            Button(action: submit) {
+            Button(action: requestSubmission) {
                 HStack(spacing: 10) {
                     if isSubmitting {
                         ProgressView()
@@ -140,7 +249,18 @@ struct TripFormView: View {
         if homeBase == nil {
             return "Confirm your home base"
         }
+        if !settingsPreferences.hasCurrentAIDataConsent {
+            return "Review AI data use"
+        }
         return "Build my itinerary"
+    }
+
+    private func requestSubmission() {
+        guard settingsPreferences.hasCurrentAIDataConsent else {
+            isShowingAIDataDisclosure = true
+            return
+        }
+        submit()
     }
 
     private var destinationSection: some View {
@@ -266,7 +386,7 @@ struct TripFormView: View {
                             title: "Travel style",
                             message: preferencesExpanded
                                 ? "A few signals help make the route feel like yours."
-                                : "\(groupSize) travelers · \(budget) budget"
+                                : "\(groupSize) travelers · \(pace.lowercased()) pace"
                         )
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.bold))
@@ -308,6 +428,103 @@ struct TripFormView: View {
                             .pickerStyle(.segmented)
                         }
 
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text("Pace")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(theme.secondaryText)
+                            Picker("Pace", selection: $pace) {
+                                Text("Relaxed").tag("Relaxed")
+                                Text("Balanced").tag("Balanced")
+                                Text("Full").tag("Full")
+                            }
+                            .pickerStyle(.segmented)
+                        }
+
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text("Getting around")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(theme.secondaryText)
+
+                            Text("Choose every option you're comfortable using.")
+                                .font(.caption)
+                                .foregroundStyle(theme.secondaryText)
+
+                            VStack(spacing: 0) {
+                                ForEach(TripTransportationOption.allCases) { option in
+                                    Button {
+                                        toggleTransportation(option)
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: option.systemImage)
+                                                .font(.body.weight(.semibold))
+                                                .foregroundStyle(theme.accent)
+                                                .frame(width: 34, height: 34)
+                                                .background(
+                                                    theme.accent.opacity(0.1),
+                                                    in: RoundedRectangle(cornerRadius: 9)
+                                                )
+
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(option.rawValue)
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(theme.primaryText)
+                                                Text(option.detail)
+                                                    .font(.caption)
+                                                    .foregroundStyle(theme.secondaryText)
+                                                    .multilineTextAlignment(.leading)
+                                            }
+
+                                            Spacer(minLength: 8)
+
+                                            Image(
+                                                systemName: transportationPreferences.contains(option)
+                                                    ? "checkmark.square.fill"
+                                                    : "square"
+                                            )
+                                            .font(.title3)
+                                            .foregroundStyle(
+                                                transportationPreferences.contains(option)
+                                                    ? theme.accent
+                                                    : theme.secondaryText
+                                            )
+                                        }
+                                        .contentShape(Rectangle())
+                                        .padding(.vertical, 11)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(
+                                        transportationPreferences.contains(option)
+                                            && transportationPreferences.count == 1
+                                    )
+                                    .accessibilityLabel(option.rawValue)
+                                    .accessibilityValue(
+                                        transportationPreferences.contains(option)
+                                            ? "Selected"
+                                            : "Not selected"
+                                    )
+
+                                    if option != TripTransportationOption.allCases.last {
+                                        Divider().overlay(theme.border.opacity(0.65))
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .background(
+                                theme.surfaceStrong.opacity(0.72),
+                                in: RoundedRectangle(cornerRadius: 14)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(theme.border.opacity(0.7), lineWidth: 1)
+                            }
+                        }
+
+                        Toggle(isOn: $travelingWithChildren) {
+                            Label("Traveling with children", systemImage: "figure.and.child.holdinghands")
+                                .foregroundStyle(theme.primaryText)
+                        }
+                        .tint(theme.accent)
+
                         TextField("Food preferences (optional)", text: $foodPreferences)
                             .itineraField()
                             .accessibilityLabel("Food preferences")
@@ -315,16 +532,268 @@ struct TripFormView: View {
                         TextField("Must-do activities (optional)", text: $mustDo)
                             .itineraField()
                             .accessibilityLabel("Must-do activities")
+
+                        interestCategorySection
+
+                        Divider().overlay(theme.border)
+
+                        accessibilityCategorySection
+
+                        Divider().overlay(theme.border)
+
+                        scheduleConstraintSection
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
                     HStack(spacing: 8) {
                         ItineraPill(text: "\(groupSize) people", systemImage: "person.2")
                         ItineraPill(text: budget, systemImage: "banknote")
+                        ItineraPill(text: pace, systemImage: "speedometer")
                     }
                 }
             }
         }
+    }
+
+    private var interestCategorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Interests")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondaryText)
+            Text("Choose any categories you want the itinerary to emphasize.")
+                .font(.caption)
+                .foregroundStyle(theme.secondaryText)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 138), spacing: 8)],
+                spacing: 8
+            ) {
+                ForEach(TripInterestCategory.allCases) { category in
+                    categoryButton(
+                        title: category.rawValue,
+                        systemImage: category.systemImage,
+                        isSelected: interestCategories.contains(category)
+                    ) {
+                        if interestCategories.contains(category) {
+                            interestCategories.remove(category)
+                        } else {
+                            interestCategories.insert(category)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var accessibilityCategorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Mobility & accessibility")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondaryText)
+            Text("Select every accommodation the route should account for.")
+                .font(.caption)
+                .foregroundStyle(theme.secondaryText)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 138), spacing: 8)],
+                spacing: 8
+            ) {
+                ForEach(TripAccessibilityCategory.allCases) { category in
+                    categoryButton(
+                        title: category.rawValue,
+                        systemImage: category.systemImage,
+                        isSelected: accessibilityCategories.contains(category)
+                    ) {
+                        if accessibilityCategories.contains(category) {
+                            accessibilityCategories.remove(category)
+                        } else {
+                            accessibilityCategories.insert(category)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func categoryButton(
+        title: String,
+        systemImage: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption)
+                }
+            }
+            .foregroundStyle(isSelected ? theme.accentContrast : theme.primaryText)
+            .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+            .padding(.horizontal, 11)
+            .background(
+                isSelected ? theme.accent : theme.surfaceStrong,
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        isSelected ? theme.accent : theme.border.opacity(0.65),
+                        lineWidth: 1
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+    }
+
+    private var scheduleConstraintSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Schedule")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondaryText)
+            Text("Use the calendar to protect free time or anchor an existing reservation.")
+                .font(.caption)
+                .foregroundStyle(theme.secondaryText)
+
+            HStack(spacing: 8) {
+                ForEach(TripScheduleConstraint.Kind.allCases) { kind in
+                    Button {
+                        scheduleKind = kind
+                        scheduleValidationMessage = nil
+                    } label: {
+                        Label(kind.title, systemImage: kind.systemImage)
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 42)
+                            .foregroundStyle(
+                                scheduleKind == kind
+                                    ? theme.accentContrast
+                                    : theme.primaryText
+                            )
+                            .background(
+                                scheduleKind == kind
+                                    ? theme.accent
+                                    : theme.surfaceStrong,
+                                in: RoundedRectangle(cornerRadius: 11)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(
+                        scheduleKind == kind ? .isSelected : []
+                    )
+                }
+            }
+
+            DatePicker(
+                "Schedule date",
+                selection: $scheduleDate,
+                in: scheduleDateRange,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .tint(theme.accent)
+
+            if scheduleKind == .fixedReservation {
+                TextField("Reservation or event name", text: $scheduleTitle)
+                    .itineraField()
+                    .accessibilityLabel("Fixed plan name")
+                TextField("Address (optional)", text: $scheduleAddress)
+                    .itineraField()
+                    .accessibilityLabel("Fixed plan address")
+            }
+
+            HStack(spacing: 12) {
+                scheduleTimePicker(title: "Starts", selection: $scheduleStartsAt)
+                scheduleTimePicker(title: "Ends", selection: $scheduleEndsAt)
+            }
+
+            if let scheduleValidationMessage {
+                Label(scheduleValidationMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(theme.warning)
+            }
+
+            Button {
+                addScheduleConstraint()
+            } label: {
+                Label(
+                    scheduleKind == .freeTime ? "Keep this time free" : "Add fixed plan",
+                    systemImage: "plus.circle.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(theme.accent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !scheduleConstraints.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(sortedScheduleConstraints) { constraint in
+                        scheduleConstraintRow(constraint)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    private func scheduleTimePicker(
+        title: String,
+        selection: Binding<Date>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondaryText)
+            DatePicker(
+                title,
+                selection: selection,
+                displayedComponents: .hourAndMinute
+            )
+            .labelsHidden()
+            .tint(theme.accent)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func scheduleConstraintRow(
+        _ constraint: TripScheduleConstraint
+    ) -> some View {
+        HStack(spacing: 11) {
+            Image(systemName: constraint.kind.systemImage)
+                .foregroundStyle(theme.accent)
+                .frame(width: 34, height: 34)
+                .background(theme.accent.opacity(0.1), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(constraint.kind == .freeTime ? "Keep free" : constraint.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.primaryText)
+                Text(scheduleConstraintSummary(constraint))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(theme.secondaryText)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(role: .destructive) {
+                scheduleConstraints.removeAll { $0.id == constraint.id }
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.danger)
+            .accessibilityLabel("Remove \(constraint.title)")
+        }
+        .padding(10)
+        .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 13))
     }
 
     private func dateRow<Content: View>(
@@ -389,6 +858,8 @@ struct TripFormView: View {
         case .homeBase:
             homeBase = selection
             homeBaseQuery = selection.homeBaseInputLabel
+        case .activity:
+            break
         }
     }
 
@@ -397,7 +868,190 @@ struct TripFormView: View {
         homeBaseQuery = ""
     }
 
+    private var transportationDraftValue: String {
+        TripTransportationOption.ordered(
+            transportationPreferences.map(\.rawValue)
+        ).joined(separator: ",")
+    }
+
+    private func toggleTransportation(_ option: TripTransportationOption) {
+        if transportationPreferences.contains(option) {
+            guard transportationPreferences.count > 1 else { return }
+            transportationPreferences.remove(option)
+        } else {
+            transportationPreferences.insert(option)
+        }
+    }
+
+    private var selectedInterestValues: [String] {
+        TripInterestCategory.allCases
+            .filter(interestCategories.contains)
+            .map(\.rawValue)
+    }
+
+    private var selectedAccessibilityValues: [String] {
+        TripAccessibilityCategory.allCases
+            .filter(accessibilityCategories.contains)
+            .map(\.rawValue)
+    }
+
+    private var scheduleDateRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        let lowerBound = calendar.startOfDay(for: arrival)
+        let upperBound = max(lowerBound, calendar.startOfDay(for: departure))
+        return lowerBound...upperBound
+    }
+
+    private var sortedScheduleConstraints: [TripScheduleConstraint] {
+        scheduleConstraints.sorted {
+            if $0.date == $1.date {
+                return minutesSinceMidnight($0.startsAt) < minutesSinceMidnight($1.startsAt)
+            }
+            return $0.date < $1.date
+        }
+    }
+
+    private func addScheduleConstraint() {
+        let startMinutes = minutesSinceMidnight(scheduleStartsAt)
+        let endMinutes = minutesSinceMidnight(scheduleEndsAt)
+        guard endMinutes > startMinutes else {
+            scheduleValidationMessage = "The end time must be later than the start time."
+            return
+        }
+
+        let normalizedTitle = scheduleTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if scheduleKind == .fixedReservation && normalizedTitle.isEmpty {
+            scheduleValidationMessage = "Add a name for the fixed reservation or event."
+            return
+        }
+
+        scheduleConstraints.append(
+            TripScheduleConstraint(
+                id: UUID(),
+                kind: scheduleKind,
+                title: scheduleKind == .freeTime ? "Keep free" : normalizedTitle,
+                date: Calendar.current.startOfDay(for: scheduleDate),
+                startsAt: scheduleStartsAt,
+                endsAt: scheduleEndsAt,
+                address: scheduleAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        )
+        scheduleTitle = ""
+        scheduleAddress = ""
+        scheduleValidationMessage = nil
+    }
+
+    private func scheduleConstraintSummary(_ constraint: TripScheduleConstraint) -> String {
+        let date = constraint.date.formatted(date: .abbreviated, time: .omitted)
+        let start = constraint.startsAt.formatted(date: .omitted, time: .shortened)
+        let end = constraint.endsAt.formatted(date: .omitted, time: .shortened)
+        return "\(date) · \(start)–\(end)"
+    }
+
+    private func minutesSinceMidnight(_ date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private func clampScheduleDateToTrip() {
+        scheduleDate = min(max(scheduleDate, scheduleDateRange.lowerBound), scheduleDateRange.upperBound)
+    }
+
+    private func discardScheduleConstraintsOutsideTrip() {
+        let range = scheduleDateRange
+        let previousCount = scheduleConstraints.count
+        scheduleConstraints.removeAll { !range.contains(Calendar.current.startOfDay(for: $0.date)) }
+        if scheduleConstraints.count != previousCount {
+            scheduleValidationMessage = "Schedule entries outside the new trip dates were removed."
+        }
+    }
+
+    private var requestTimeZone: TimeZone {
+        destination?.timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
+            ?? homeBase?.timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
+            ?? .current
+    }
+
+    private var fixedReservationInputs: [FixedReservationInput] {
+        scheduleConstraints.compactMap { constraint in
+            guard constraint.kind == .fixedReservation else { return nil }
+            return FixedReservationInput(
+                title: constraint.title,
+                startsAt: iso8601Date(
+                    on: constraint.date,
+                    at: constraint.startsAt
+                ),
+                endsAt: iso8601Date(
+                    on: constraint.date,
+                    at: constraint.endsAt
+                ),
+                address: constraint.address.isEmpty ? nil : constraint.address
+            )
+        }
+    }
+
+    private var unavailableTimeInputs: [UnavailableTimeInput] {
+        scheduleConstraints.compactMap { constraint in
+            guard constraint.kind == .freeTime else { return nil }
+            return UnavailableTimeInput(
+                date: tripDayString(constraint.date),
+                startsAt: clockString(constraint.startsAt),
+                endsAt: clockString(constraint.endsAt)
+            )
+        }
+    }
+
+    private func iso8601Date(on date: Date, at time: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = requestTimeZone
+        let dateComponents = Calendar.current.dateComponents(
+            [.year, .month, .day],
+            from: date
+        )
+        let timeComponents = Calendar.current.dateComponents(
+            [.hour, .minute],
+            from: time
+        )
+        let combined = calendar.date(
+            from: DateComponents(
+                timeZone: requestTimeZone,
+                year: dateComponents.year,
+                month: dateComponents.month,
+                day: dateComponents.day,
+                hour: timeComponents.hour,
+                minute: timeComponents.minute
+            )
+        ) ?? date
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = requestTimeZone
+        return formatter.string(from: combined)
+    }
+
+    private func tripDayString(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private func clockString(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return String(
+            format: "%02d:%02d",
+            components.hour ?? 0,
+            components.minute ?? 0
+        )
+    }
+
     private func submit() {
+        guard settingsPreferences.hasCurrentAIDataConsent else {
+            isShowingAIDataDisclosure = true
+            return
+        }
         guard let destination, let homeBase else { return }
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = Calendar(identifier: .gregorian)
@@ -417,8 +1071,21 @@ struct TripFormView: View {
             groupSize: groupSize,
             wakeUpTime: timeFormatter.string(from: wakeUpTime),
             foodPreferences: foodPreferences.isEmpty ? nil : foodPreferences,
-            mustDo: mustDo.isEmpty ? nil : mustDo,
-            budget: budget
+            mustDo: combinedMustDo,
+            budget: budget,
+            pace: pace,
+            transportationModes: TripTransportationOption.ordered(
+                transportationPreferences.map(\.rawValue)
+            ),
+            travelingWithChildren: travelingWithChildren,
+            interests: selectedInterestValues,
+            accessibilityCategories: selectedAccessibilityValues,
+            accessibilityNeeds: nil,
+            fixedReservations: fixedReservationInputs,
+            unavailableTimes: unavailableTimeInputs,
+            timezone: destination.timeZoneIdentifier
+                ?? homeBase.timeZoneIdentifier
+                ?? TimeZone.current.identifier
         )
         Task {
             isSubmitting = true
@@ -437,11 +1104,17 @@ struct TripFormView: View {
             }
         }
     }
+
+    private var combinedMustDo: String? {
+        let value = mustDo.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
 }
 
 #Preview("Atlas · Plan") {
     TripFormView()
         .environmentObject(AppState.live())
+        .environmentObject(SettingsPreferences())
         .environment(\.itineraTheme, .atlas)
         .preferredColorScheme(.light)
 }

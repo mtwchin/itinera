@@ -7,8 +7,10 @@ only grounded place data and turns it into the API's validated itinerary shape.
 from __future__ import annotations
 
 import math
-from typing import Protocol
 import unicodedata
+import uuid
+from datetime import timedelta
+from typing import Protocol
 from urllib.parse import urlparse
 
 import anthropic
@@ -65,30 +67,67 @@ def validate_itinerary_semantics(
         )
 
     for day in itinerary.itinerary:
+        if day.date is None:
+            day.date = request.arrival_date + timedelta(days=day.day - 1)
         for activity in day.activities:
-            grounded = any(
-                _normalize_grounding_text(activity.name)
-                == _normalize_grounding_text(place["name"])
-                and _normalize_grounding_text(activity.address)
-                == _normalize_grounding_text(place["address"])
-                and math.isclose(
-                    activity.coordinates.lat,
-                    float(place["coordinates"]["lat"]),
-                    rel_tol=0,
-                    abs_tol=GROUNDING_COORDINATE_TOLERANCE_DEGREES,
-                )
-                and math.isclose(
-                    activity.coordinates.lng,
-                    float(place["coordinates"]["lng"]),
-                    rel_tol=0,
-                    abs_tol=GROUNDING_COORDINATE_TOLERANCE_DEGREES,
-                )
-                for place in places
+            grounded_place = next(
+                (
+                    place
+                    for place in places
+                    if (
+                        _normalize_grounding_text(activity.name)
+                        == _normalize_grounding_text(place["name"])
+                        and _normalize_grounding_text(activity.address)
+                        == _normalize_grounding_text(place["address"])
+                        and math.isclose(
+                            activity.coordinates.lat,
+                            float(place["coordinates"]["lat"]),
+                            rel_tol=0,
+                            abs_tol=GROUNDING_COORDINATE_TOLERANCE_DEGREES,
+                        )
+                        and math.isclose(
+                            activity.coordinates.lng,
+                            float(place["coordinates"]["lng"]),
+                            rel_tol=0,
+                            abs_tol=GROUNDING_COORDINATE_TOLERANCE_DEGREES,
+                        )
+                    )
+                ),
+                None,
             )
-            if not grounded:
+            if grounded_place is None:
                 raise ComposerError(
                     "Composed itinerary failed semantic validation: ungrounded activity"
                 )
+            stable_place_key = str(
+                grounded_place.get("place_id")
+                or grounded_place.get("id")
+                or (
+                    f"{grounded_place.get('source', 'unknown')}:"
+                    f"{grounded_place['name']}:{grounded_place['address']}"
+                )
+            )
+            if activity.id is None:
+                activity.id = str(uuid.uuid5(uuid.NAMESPACE_URL, stable_place_key))
+            for attribute in (
+                "place_id",
+                "source",
+                "retrieved_at",
+                "verification_state",
+                "opening_hours",
+                "phone",
+                "website_url",
+                "reservation_url",
+                "estimated_cost",
+                "accessibility_notes",
+            ):
+                if (
+                    getattr(activity, attribute) is None
+                    and grounded_place.get(attribute) is not None
+                ):
+                    setattr(activity, attribute, grounded_place[attribute])
+    if itinerary.timezone is None:
+        itinerary.timezone = request.timezone
     return itinerary
 
 
@@ -112,6 +151,26 @@ Wake up time: {request.wake_up_time}
 Food preferences: {request.food_preferences or "None specified"}
 Must-do activities: {request.must_do or "None specified"}
 Budget: {request.budget}
+Pace: {request.pace}
+Transportation modes: {", ".join(request.transportation_modes)}
+Traveling with children: {"Yes" if request.traveling_with_children else "No"}
+Interests: {", ".join(request.interests) or "None specified"}
+Accessibility categories: {", ".join(request.accessibility_categories) or "None selected"}
+Additional accessibility needs: {request.accessibility_needs or "None specified"}
+Fixed reservations: {
+    "; ".join(
+        f"{item.title} at {item.starts_at.isoformat()}"
+        + (f" to {item.ends_at.isoformat()}" if item.ends_at else "")
+        + (f" ({item.address})" if item.address else "")
+        for item in request.fixed_reservations
+    ) or "None"
+}
+Unavailable times: {
+    "; ".join(
+        f"{item.date.isoformat()} {item.starts_at}-{item.ends_at}"
+        for item in request.unavailable_times
+    ) or "None"
+}
 
 Discovered places (sorted by popularity), with provider provenance and coordinates:
 {places_list}
@@ -123,6 +182,9 @@ Create a {days}-day itinerary that:
 4. Includes must-do activities and food preferences when they match the grounded data
 5. Uses realistic activity and travel timing
 6. Copies coordinates and addresses from the supplied places; never invents a place or location
+7. Uses only the selected transportation modes and honors pace, children, interests, accessibility categories, and additional needs
+8. Treats fixed reservations as immovable and schedules nothing during unavailable times
+9. Includes each day's concrete calendar date and the supplied IANA timezone when present
 
 Include practical tips, accommodation timing and transport guidance, and an estimated total
 budget per person. Return only data that conforms to the supplied JSON schema."""

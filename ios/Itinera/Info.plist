@@ -17,13 +17,28 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.itinera.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>itinera</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>ItineraAPIBaseURL</key>
 	<string>$(ITINERA_API_BASE_URL)</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Itinera adds itinerary stops to your calendar only when you ask it to.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

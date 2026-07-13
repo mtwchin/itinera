@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date as Date
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -40,19 +41,133 @@ class Accommodation(BaseModel):
 
 
 Budget = Literal["Low", "Medium", "High"]
+TransportationMode = Literal["Walking", "Transit", "Driving"]
+AccessibilityCategory = Literal[
+    "Step-free routes",
+    "Wheelchair access",
+    "Limited walking",
+    "Frequent rest breaks",
+    "Accessible restrooms",
+    "Hearing support",
+    "Visual support",
+    "Sensory-friendly",
+]
+
+
+def _all_transportation_modes() -> list[TransportationMode]:
+    return ["Walking", "Transit", "Driving"]
+
+
+def _all_accessibility_categories() -> list[AccessibilityCategory]:
+    return [
+        "Step-free routes",
+        "Wheelchair access",
+        "Limited walking",
+        "Frequent rest breaks",
+        "Accessible restrooms",
+        "Hearing support",
+        "Visual support",
+        "Sensory-friendly",
+    ]
+
+
+class FixedReservation(BaseModel):
+    title: Name
+    starts_at: datetime
+    ends_at: datetime | None = None
+    address: Address | None = None
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "FixedReservation":
+        if self.ends_at is not None and self.ends_at < self.starts_at:
+            raise ValueError("reservation ends_at cannot be before starts_at")
+        return self
+
+
+class UnavailableTime(BaseModel):
+    date: Date
+    starts_at: HHMM
+    ends_at: HHMM
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "UnavailableTime":
+        if self.ends_at <= self.starts_at:
+            raise ValueError("unavailable ends_at must be after starts_at")
+        return self
 
 
 class GenerateItineraryRequest(BaseModel):
     city: Name
     country: Name
     accommodation: Accommodation
-    arrival_date: date
-    departure_date: date
+    arrival_date: Date
+    departure_date: Date
     group_size: int = Field(ge=1, le=20)
     wake_up_time: HHMM = "08:00"
     food_preferences: PreferenceText | None = None
     must_do: PreferenceText | None = None
     budget: Budget = "Medium"
+    pace: Literal["Relaxed", "Balanced", "Full"] = "Balanced"
+    transportation_preference: Literal[
+        "Walking", "Transit", "Driving", "Mixed"
+    ] = "Mixed"
+    transportation_modes: list[TransportationMode] = Field(
+        default_factory=_all_transportation_modes,
+        min_length=1,
+        max_length=3,
+    )
+    traveling_with_children: bool = False
+    interests: list[Name] = Field(default_factory=list, max_length=20)
+    accessibility_needs: PreferenceText | None = None
+    accessibility_categories: list[AccessibilityCategory] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    fixed_reservations: list[FixedReservation] = Field(
+        default_factory=list, max_length=50
+    )
+    unavailable_times: list[UnavailableTime] = Field(
+        default_factory=list, max_length=100
+    )
+    timezone: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=64,
+            pattern=r"^[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+$",
+        ),
+    ] | None = None
+
+    @model_validator(mode="after")
+    def _normalize_transportation(self) -> "GenerateItineraryRequest":
+        if "transportation_modes" not in self.model_fields_set:
+            if self.transportation_preference == "Mixed":
+                self.transportation_modes = _all_transportation_modes()
+            else:
+                self.transportation_modes = [self.transportation_preference]
+        else:
+            canonical_order = _all_transportation_modes()
+            self.transportation_modes = [
+                mode for mode in canonical_order if mode in self.transportation_modes
+            ]
+
+        self.transportation_preference = (
+            self.transportation_modes[0]
+            if len(self.transportation_modes) == 1
+            else "Mixed"
+        )
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_accessibility(self) -> "GenerateItineraryRequest":
+        canonical_order = _all_accessibility_categories()
+        self.accessibility_categories = [
+            category
+            for category in canonical_order
+            if category in self.accessibility_categories
+        ]
+        return self
 
     @model_validator(mode="after")
     def _validate_trip_dates(self) -> "GenerateItineraryRequest":
@@ -61,10 +176,19 @@ class GenerateItineraryRequest(BaseModel):
             raise ValueError("departure_date must be after arrival_date")
         if nights > 30:
             raise ValueError("trip length cannot exceed 30 days")
+        for reservation in self.fixed_reservations:
+            if not (self.arrival_date <= reservation.starts_at.date() <= self.departure_date):
+                raise ValueError("fixed reservations must fall within the trip dates")
+        for unavailable in self.unavailable_times:
+            if not (self.arrival_date <= unavailable.date <= self.departure_date):
+                raise ValueError("unavailable times must fall within the trip dates")
         return self
 
 
 class Activity(BaseModel):
+    id: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)
+    ] | None = None
     time: str
     name: str
     type: str
@@ -72,10 +196,37 @@ class Activity(BaseModel):
     description: str
     address: str
     coordinates: Coordinates
+    place_id: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+    ] | None = None
+    source: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+    ] | None = None
+    retrieved_at: datetime | None = None
+    verification_state: Literal[
+        "unverified", "provider_verified", "user_reported", "stale"
+    ] | None = None
+    opening_hours: list[str] | None = Field(default=None, max_length=14)
+    phone: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)
+    ] | None = None
+    website_url: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)
+    ] | None = None
+    reservation_url: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)
+    ] | None = None
+    estimated_cost: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ] | None = None
+    accessibility_notes: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+    ] | None = None
 
 
 class Day(BaseModel):
     day: int
+    date: Date | None = None
     theme: str
     activities: list[Activity]
 
@@ -91,6 +242,15 @@ class Itinerary(BaseModel):
     tips: list[str]
     accommodation_info: AccommodationInfo
     estimated_budget: str
+    timezone: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=64,
+            pattern=r"^[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+$",
+        ),
+    ] | None = None
 
 
 class JobAccepted(BaseModel):
@@ -105,6 +265,7 @@ class JobStatusResponse(BaseModel):
     status: Literal["pending", "running", "succeeded", "failed"]
     result: Itinerary | None = None
     error: str | None = None
+    version: int = Field(default=1, ge=1)
 
 
 class SavedItinerary(BaseModel):
@@ -113,11 +274,13 @@ class SavedItinerary(BaseModel):
     title: str | None = None
     city: str | None = None
     country: str | None = None
-    arrival_date: date | None = None
-    departure_date: date | None = None
+    arrival_date: Date | None = None
+    departure_date: Date | None = None
     result: Itinerary | None = None
     error: str | None = None
     source_public_itinerary_id: uuid.UUID | None = None
+    archived_at: datetime | None = None
+    version: int = Field(default=1, ge=1)
     created_at: datetime
 
     @classmethod
@@ -126,7 +289,7 @@ class SavedItinerary(BaseModel):
         return cls(
             job_id=row.job_id,
             status=row.status.value,
-            title=req.get("title"),
+            title=row.title or req.get("title"),
             city=req.get("city"),
             country=req.get("country"),
             arrival_date=req.get("arrival_date"),
@@ -134,6 +297,8 @@ class SavedItinerary(BaseModel):
             result=row.result,
             error=row.error,
             source_public_itinerary_id=row.source_public_itinerary_id,
+            archived_at=row.archived_at,
+            version=row.version or 1,
             created_at=row.created_at,
         )
 

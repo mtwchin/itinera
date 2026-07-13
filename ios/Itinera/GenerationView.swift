@@ -4,8 +4,10 @@ import SwiftUI
 /// to ItineraryView. Pending job IDs survive relaunch and polling is cancellable.
 struct GenerationView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @Environment(\.dismiss) private var dismiss
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
 
     let jobID: String
 
@@ -31,15 +33,35 @@ struct GenerationView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .task(id: pollAttempt) {
             await appState.registerPending(jobID: jobID)
+            let tripTitle = appState.pendingJobs.first { $0.jobID == jobID }?.title
             do {
                 itinerary = try await appState.apiClient.awaitItinerary(jobID)
+                if let itinerary {
+                    await appState.cacheCompletedTrip(
+                        jobID: jobID,
+                        itinerary: itinerary
+                    )
+                }
                 await appState.resolvePending(jobID: jobID)
+                if settingsPreferences.generationNotificationsEnabled,
+                   scenePhase != .active {
+                    try? await GenerationNotificationManager.shared.notifyTripReady(
+                        jobID: jobID,
+                        title: tripTitle
+                    )
+                }
             } catch is CancellationError {
                 return
             } catch let error as APIError where error.shouldRemovePendingJob {
                 await appState.resolvePending(jobID: jobID)
                 isTerminalFailure = true
                 errorMessage = error.localizedDescription
+                if settingsPreferences.generationNotificationsEnabled,
+                   scenePhase != .active {
+                    try? await GenerationNotificationManager.shared.notifyGenerationFailed(
+                        jobID: jobID
+                    )
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

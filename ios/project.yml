@@ -24,22 +24,33 @@ targets:
     sources:
       - path: Itinera
         excludes: [Info-Debug.plist]
+      - path: Shared
     info:
       path: Itinera/Info.plist
       properties:
         CFBundleDisplayName: Itinera
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ItineraAPIBaseURL: $(ITINERA_API_BASE_URL)
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
+        NSSupportsLiveActivities: true
+        NSCalendarsWriteOnlyAccessUsageDescription: Itinera adds itinerary stops to your calendar only when you ask it to.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.itinera.app
+            CFBundleURLSchemes: [itinera]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Itinera/Itinera.entitlements
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
       configs:
         Debug:
           INFOPLIST_FILE: Itinera/Info-Debug.plist
+    dependencies:
+      - target: ItineraWidget
     preBuildScripts:
       - name: Validate Production API URL
         basedOnDependencyAnalysis: false
@@ -63,12 +74,33 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app.tests
         GENERATE_INFOPLIST_FILE: YES
+  ItineraWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ItineraWidget
+      - path: Shared
+    info:
+      path: ItineraWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Itinera
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app.widget
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: ItineraWidget/ItineraWidget.entitlements
 schemes:
   Itinera:
     build:
       targets:
         Itinera: all
         ItineraTests: [test]
+        ItineraWidget: all
     test:
       config: Debug
       targets:
