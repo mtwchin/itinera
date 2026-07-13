@@ -24,7 +24,14 @@ async function render() {
 }
 
 test("server-renders the Itinera campaign page", async () => {
+  const previousSiteUrl = process.env.SITE_URL;
+  process.env.SITE_URL = "https://itinera.example";
   const response = await render();
+  if (previousSiteUrl === undefined) {
+    delete process.env.SITE_URL;
+  } else {
+    process.env.SITE_URL = previousSiteUrl;
+  }
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
@@ -38,7 +45,7 @@ test("server-renders the Itinera campaign page", async () => {
   assert.match(html, /Preparing for TestFlight|TestFlight/);
   assert.match(html, /<nav[^>]*aria-label="Main navigation"/i);
   assert.match(html, /<main id="top">/i);
-  assert.match(html, /property="og:image" content="http:\/\/localhost:3000\/og\.png"/i);
+  assert.match(html, /property="og:image" content="https:\/\/itinera\.example\/og\.png"/i);
   assert.match(html, /name="twitter:card" content="summary_large_image"/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -56,6 +63,7 @@ test("removes starter-only code and metadata", async () => {
   assert.match(page, /Illustrative itinerary/);
   assert.match(layout, /const title = "Itinera/);
   assert.match(layout, /generateMetadata/);
+  assert.match(layout, /process\.env\.SITE_URL/);
   assert.match(layout, /app-icon\.png/);
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(layout, /codex-preview|Starter Project|_sites-preview/);
