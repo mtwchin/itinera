@@ -208,6 +208,7 @@ def test_duplicate_terminal_delivery_does_not_run_pipeline():
         job_id="job-1",
         status=JobStatus.succeeded,
         request={"city": "Lisbon"},
+        version=3,
         result={"itinerary": []},
     )
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
@@ -215,6 +216,7 @@ def test_duplicate_terminal_delivery_does_not_run_pipeline():
     ) as pipeline:
         result = tasks.run_itinerary_pipeline.run(job_id="job-1")
     assert result["status"] == "succeeded"
+    assert result["version"] == 3
     pipeline.assert_not_called()
 
 
@@ -239,6 +241,7 @@ def test_worker_persists_success_before_terminal_cache_and_publish():
     from backend.workers import tasks
 
     order: list[str] = []
+    cached_payload: dict = {}
     claim = JobClaim(
         claimed=True,
         job_id="job-1",
@@ -255,24 +258,37 @@ def test_worker_persists_success_before_terminal_cache_and_publish():
     def publish(_client, _job_id, event):
         order.append(f"publish:{event['type']}")
 
+    def cache(_client, _job_id, payload, _ttl):
+        order.append("cache")
+        cached_payload.update(payload)
+
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", return_value={"itinerary": {"itinerary": []}}
     ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
-        tasks, "_cache_terminal", side_effect=lambda *_: order.append("cache")
+        tasks, "_cache_terminal", side_effect=cache
     ), patch.object(tasks, "_publish", side_effect=publish), patch.object(
         tasks.redis_sync, "from_url", return_value=MagicMock()
-    ):
+    ) as redis_factory:
         result = tasks.run_itinerary_pipeline.run(job_id="job-1")
 
     assert result["status"] == "succeeded"
+    assert result["version"] == 1
+    assert cached_payload["version"] == 1
     assert order.index("database") < order.index("cache")
     assert order.index("database") < order.index("publish:succeeded")
+    redis_factory.assert_called_once_with(
+        tasks._settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=tasks._settings.redis_operation_timeout_seconds,
+        socket_timeout=tasks._settings.redis_operation_timeout_seconds,
+    )
 
 
 def test_worker_persists_failure_before_terminal_cache_and_publish():
     from backend.workers import tasks
 
     order: list[str] = []
+    cached_payload: dict = {}
     claim = JobClaim(
         claimed=True,
         job_id="job-1",
@@ -289,10 +305,14 @@ def test_worker_persists_failure_before_terminal_cache_and_publish():
     def publish(_client, _job_id, event):
         order.append(f"publish:{event['type']}")
 
+    def cache(_client, _job_id, payload, _ttl):
+        order.append("cache")
+        cached_payload.update(payload)
+
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", side_effect=RuntimeError("provider failed")
     ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
-        tasks, "_cache_terminal", side_effect=lambda *_: order.append("cache")
+        tasks, "_cache_terminal", side_effect=cache
     ), patch.object(tasks, "_publish", side_effect=publish), patch.object(
         tasks.redis_sync, "from_url", return_value=MagicMock()
     ):
@@ -301,3 +321,4 @@ def test_worker_persists_failure_before_terminal_cache_and_publish():
 
     assert order.index("database") < order.index("cache")
     assert order.index("database") < order.index("publish:failed")
+    assert cached_payload["version"] == 1

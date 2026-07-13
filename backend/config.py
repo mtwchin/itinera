@@ -34,6 +34,7 @@ class Settings(BaseSettings):
             return value.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
     redis_url: str = Field(default="redis://localhost:6379/0")
+    redis_operation_timeout_seconds: float = Field(default=0.5, gt=0, le=5)
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
 

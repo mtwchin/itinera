@@ -55,6 +55,7 @@ class JobClaim:
     job_id: str
     status: JobStatus
     request: dict
+    version: int = 1
     run_token: str | None = None
     result: dict | None = None
     error: str | None = None
@@ -699,9 +700,17 @@ async def accept_collaboration_invite(
     return existing
 
 
-async def delete_user_data(session: AsyncSession, *, user: User) -> None:
+async def delete_user_data(session: AsyncSession, *, user: User) -> list[str]:
+    job_ids = list(
+        (
+            await session.execute(
+                select(Itinerary.job_id).where(Itinerary.user_id == user.id)
+            )
+        ).scalars()
+    )
     await session.delete(user)
     await session.flush()
+    return job_ids
 
 
 def _public_save_counts():
@@ -952,6 +961,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     job_id=job_id,
                     status=row.status,
                     request=row.request,
+                    version=row.version or 1,
                     result=row.result,
                     error=row.error,
                 )
@@ -967,6 +977,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     job_id=job_id,
                     status=row.status,
                     request=row.request,
+                    version=row.version or 1,
                 )
 
             run_token = uuid.uuid4().hex
@@ -981,6 +992,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                 job_id=job_id,
                 status=JobStatus.running,
                 request=row.request,
+                version=row.version or 1,
                 run_token=run_token,
             )
     finally:

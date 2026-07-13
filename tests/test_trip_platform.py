@@ -23,6 +23,7 @@ from backend.db.repo import (
     InvalidRevisionError,
     ItineraryVersionConflictError,
     apply_itinerary_operations,
+    delete_user_data,
     duplicate_owned_itinerary,
     list_itineraries,
     materialize_activity_ids,
@@ -435,6 +436,32 @@ def test_trip_can_be_restored_from_archive(trip_client):
     )
 
 
+def test_duplicate_refreshes_fresh_terminal_namespace_after_commit(trip_client):
+    client, session, user = trip_client
+    duplicate = itinerary_row(user)
+    duplicate.job_id = "trip-copy"
+    duplicate.version = 1
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
+
+    with patch(
+        "backend.routers.trips.duplicate_owned_itinerary",
+        new_callable=AsyncMock,
+        return_value=duplicate,
+    ), patch(
+        "backend.routers.trips.refresh_terminal_status",
+        new_callable=AsyncMock,
+        side_effect=lambda _row: order.append("cache"),
+    ) as refresh_cache:
+        response = client.post("/api/v1/itineraries/trip-1/duplicate")
+
+    assert response.status_code == 201
+    assert response.json()["job_id"] == "trip-copy"
+    assert response.json()["version"] == 1
+    refresh_cache.assert_awaited_once_with(duplicate)
+    assert order == ["commit", "cache"]
+
+
 def test_include_archived_listing_remains_owner_scoped(trip_client):
     client, session, user = trip_client
     row = itinerary_row(user)
@@ -499,6 +526,7 @@ def test_revision_conflict_returns_current_version(trip_client):
 def test_revision_response_contains_new_version(trip_client):
     client, session, user = trip_client
     row = itinerary_row(user)
+    row.version = 3
     revision = ItineraryRevision(
         id=uuid.uuid4(),
         itinerary_id=row.id,
@@ -509,11 +537,17 @@ def test_revision_response_contains_new_version(trip_client):
         result=result(),
         created_at=datetime.now(timezone.utc),
     )
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
         "backend.routers.trips.revise_itinerary",
         new_callable=AsyncMock,
         return_value=(row, revision),
-    ):
+    ), patch(
+        "backend.routers.trips.refresh_terminal_status",
+        new_callable=AsyncMock,
+        side_effect=lambda _row: order.append("cache"),
+    ) as refresh_cache:
         response = client.post(
             "/api/v1/itineraries/trip-1/revisions",
             json={"expected_version": 2, "operations": revision.operations},
@@ -522,6 +556,8 @@ def test_revision_response_contains_new_version(trip_client):
     assert response.status_code == 201
     assert response.json()["to_version"] == 3
     session.commit.assert_awaited_once()
+    refresh_cache.assert_awaited_once_with(row)
+    assert order == ["commit", "cache"]
 
 
 def test_reservation_endpoint_persists_typed_owner_scoped_data(trip_client):
@@ -607,15 +643,43 @@ def test_delete_trip_does_not_disclose_another_users_trip(trip_client):
     session.commit.assert_not_awaited()
 
 
+def test_delete_trip_invalidates_terminal_cache_after_commit(trip_client):
+    client, session, _ = trip_client
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
+    with patch(
+        "backend.routers.trips.delete_owned_itinerary",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "backend.routers.trips.invalidate_terminal_statuses",
+        new_callable=AsyncMock,
+        side_effect=lambda _job_ids: order.append("cache"),
+    ) as invalidate_cache:
+        response = client.delete("/api/v1/itineraries/trip-1")
+
+    assert response.status_code == 204
+    invalidate_cache.assert_awaited_once_with(["trip-1"])
+    assert order == ["commit", "cache"]
+
+
 def test_delete_my_data_requires_exact_confirmation(trip_client):
     client, session, user = trip_client
     assert client.request(
         "DELETE", "/api/v1/auth/me", json={"confirmation": "delete"}
     ).status_code == 422
 
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
-        "backend.routers.auth.delete_user_data", new_callable=AsyncMock
-    ) as delete_data:
+        "backend.routers.auth.delete_user_data",
+        new_callable=AsyncMock,
+        return_value=["trip-1", "trip-2"],
+    ) as delete_data, patch(
+        "backend.routers.auth.invalidate_terminal_statuses",
+        new_callable=AsyncMock,
+        side_effect=lambda _job_ids: order.append("cache"),
+    ) as invalidate_cache:
         response = client.request(
             "DELETE", "/api/v1/auth/me", json={"confirmation": "DELETE"}
         )
@@ -623,3 +687,24 @@ def test_delete_my_data_requires_exact_confirmation(trip_client):
     assert response.status_code == 204
     delete_data.assert_awaited_once_with(session, user=user)
     session.commit.assert_awaited_once()
+    invalidate_cache.assert_awaited_once_with(["trip-1", "trip-2"])
+    assert order == ["commit", "cache"]
+
+
+@pytest.mark.asyncio
+async def test_delete_user_data_returns_only_owned_cache_namespaces():
+    user = User(id=uuid.uuid4())
+    lookup = MagicMock()
+    lookup.scalars.return_value = ["owned-trip-1", "owned-trip-2"]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=lookup)
+    session.delete = AsyncMock()
+    session.flush = AsyncMock()
+
+    job_ids = await delete_user_data(session, user=user)
+
+    assert job_ids == ["owned-trip-1", "owned-trip-2"]
+    statement = session.execute.await_args.args[0]
+    assert "itineraries.user_id" in str(statement)
+    session.delete.assert_awaited_once_with(user)
+    session.flush.assert_awaited_once()
