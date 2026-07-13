@@ -162,6 +162,12 @@ actor PendingSubmissionStore {
         try persist(try all().filter { $0.idempotencyKey != idempotencyKey })
     }
 
+    func removeAll() throws {
+        cachedRecords = []
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        try fileManager.removeItem(at: fileURL)
+    }
+
     private func persist(_ records: [PendingSubmissionRecord]) throws {
         let sorted = records.sorted { $0.createdAt > $1.createdAt }
         let directory = fileURL.deletingLastPathComponent()

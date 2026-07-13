@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,7 @@ from backend.db.models import JobStatus, PublicItinerary, User
 from backend.db.repo import (
     PopularItineraryListing,
     PopularItineraryLocationListing,
+    materialize_activity_ids,
     save_public_itinerary_for_user,
 )
 from backend.db.session import get_session
@@ -147,7 +149,11 @@ async def test_save_creates_private_completed_snapshot_without_outbox():
     }
     assert "accommodation" not in row.request
     assert "arrival_date" not in row.request
-    assert row.result == public.result
+    assert row.result == materialize_activity_ids(
+        deepcopy(public.result),
+        trip_namespace=row.job_id,
+        force_reissue=True,
+    )
     assert row.result is not public.result
     session.add.assert_called_once_with(row)
 

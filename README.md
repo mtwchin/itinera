@@ -29,8 +29,35 @@ Flask prototypes have been removed.
 
 Architecture and launch guardrails are recorded in
 `docs/architecture-decisions.md` and `docs/production-readiness.md`. The
-evidence-backed post-Sprint 1 backlog and release sequence are in
-`docs/next-completion-plan.md`.
+current product sequence and operational release gates are in
+`docs/product-roadmap.md`.
+
+## iOS product surface
+
+The app now covers the trip lifecycle rather than stopping at generation:
+
+- offline-protected completed trips, destination-time-zone **Today** mode,
+  persistent stop progress, and searchable Active/Upcoming/Past/Archive groups;
+- live walking, transit, and driving legs from MapKit with a clear fallback,
+  plus Apple Maps and segmented Google Maps handoff;
+- versioned manual editing, reorder/replace/remove operations, locked stops,
+  revision history, undo, weather-aware day adjustments, and inaccurate-place
+  reports;
+- multi-select transport, interest, and accessibility categories plus a
+  calendar-backed editor for fixed plans and protected free-time blocks;
+- reservations, preparation checklists, expenses, private collaborator links,
+  native text/PDF sharing, and Calendar export;
+- local trip-ready and leave-by notifications, a Lock Screen/Dynamic Island
+  Live Activity, and a WidgetKit extension;
+- appearance, AI-consent, notification, storage, account recovery, and complete
+  data-deletion controls in Settings;
+- optional Sign in with Apple recovery so a guest library can be restored on a
+  different iPhone.
+
+Some capabilities require Apple Developer configuration before they work on a
+physical device: Sign in with Apple, WeatherKit, and the Widget/Live Activity
+extension must be enabled for the app identifiers and provisioning profiles,
+including the `group.com.itinera.shared` App Group on both targets.
 
 ## Local backend
 
@@ -118,6 +145,7 @@ Required production values:
   when `anthropic` is explicitly selected.
 - `TRENDS_FEED_URL` and `TRENDS_FEED_API_KEY`.
 - `APPLE_MAPS_TEAM_ID`, `APPLE_MAPS_KEY_ID`, and `APPLE_MAPS_PRIVATE_KEY`.
+- `APPLE_SIGN_IN_CLIENT_ID` when Sign in with Apple library recovery is enabled.
 
 The normalized trends endpoint accepts a bearer-authenticated POST body of
 `{"city": ..., "country": ..., "limit": ...}` and returns either a `places`
@@ -144,8 +172,8 @@ The default visual direction is **Atlas Field Notes**. UI presentation is
 isolated behind semantic theme tokens so visual experiments do not touch API,
 authentication, or persistence behavior. In Debug, choose a direction with
 `ITINERA_THEME=atlas`, `wayfinder`, or `signal`. To inspect the deterministic
-itinerary fixture without a backend, also set
-`ITINERA_DEMO_SCREEN=itinerary`.
+itinerary or Settings without a backend, set `ITINERA_DEMO_SCREEN=itinerary`
+or `ITINERA_DEMO_SCREEN=settings`.
 
 The **Popular** tab groups privacy-reviewed catalog itineraries by destination.
 Opening a route loads its full detail on demand; saving it creates a private,
@@ -166,6 +194,8 @@ python scripts/export_openapi.py --check
 
 cd ios
 xcodegen generate
+xcodebuild -project Itinera.xcodeproj -scheme Itinera \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
 GitHub Actions runs these backend checks and builds/tests the shared `Itinera`

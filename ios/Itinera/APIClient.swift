@@ -97,6 +97,10 @@ actor APIClient {
         let refreshToken: String
     }
 
+    private struct AppleIdentityRequest: Encodable, Sendable {
+        let identityToken: String
+    }
+
     private struct ServerErrorDetails: Sendable {
         let code: String?
         let message: String
@@ -150,8 +154,171 @@ actor APIClient {
         )
     }
 
-    func savedItineraries() async throws -> [SavedItinerary] {
-        try await send(path: "/api/v1/itineraries", as: [SavedItinerary].self)
+    func savedItineraries(includeArchived: Bool = false) async throws -> [SavedItinerary] {
+        let path = includeArchived
+            ? "/api/v1/itineraries?include_archived=true"
+            : "/api/v1/itineraries"
+        return try await send(path: path, as: [SavedItinerary].self)
+    }
+
+    func updateTrip(
+        _ jobID: String,
+        title: String? = nil,
+        archived: Bool? = nil
+    ) async throws -> TripMutationResponse {
+        try await send(
+            path: "/api/v1/itineraries/\(jobID)",
+            method: "PATCH",
+            body: encoder.encode(
+                TripUpdateRequest(title: title, archived: archived)
+            ),
+            as: TripMutationResponse.self
+        )
+    }
+
+    func deleteTrip(_ jobID: String) async throws {
+        try await sendWithoutResponse(
+            path: "/api/v1/itineraries/\(jobID)",
+            method: "DELETE"
+        )
+    }
+
+    func duplicateTrip(_ jobID: String) async throws -> SavedItinerary {
+        try await send(
+            path: "/api/v1/itineraries/\(jobID)/duplicate",
+            method: "POST",
+            as: SavedItinerary.self
+        )
+    }
+
+    func reviseTrip(
+        _ jobID: String,
+        expectedVersion: Int,
+        operations: [TripRevisionOperation]
+    ) async throws -> ItineraryRevisionResponse {
+        try await send(
+            path: "/api/v1/itineraries/\(jobID)/revisions",
+            method: "POST",
+            body: encoder.encode(
+                ItineraryRevisionCreate(
+                    expectedVersion: expectedVersion,
+                    operations: operations
+                )
+            ),
+            as: ItineraryRevisionResponse.self
+        )
+    }
+
+    func revisionHistory(_ jobID: String) async throws -> [ItineraryRevisionResponse] {
+        try await send(
+            path: "/api/v1/itineraries/\(jobID)/revisions",
+            as: [ItineraryRevisionResponse].self
+        )
+    }
+
+    func reservations(_ jobID: String) async throws -> [TripReservation] {
+        try await send(path: "/api/v1/itineraries/\(jobID)/reservations", as: [TripReservation].self)
+    }
+
+    func createReservation(_ jobID: String, input: TripReservationCreate) async throws -> TripReservation {
+        try await send(path: "/api/v1/itineraries/\(jobID)/reservations", method: "POST", body: encoder.encode(input), as: TripReservation.self)
+    }
+
+    func deleteReservation(_ jobID: String, reservationID: String) async throws {
+        try await sendWithoutResponse(path: "/api/v1/itineraries/\(jobID)/reservations/\(reservationID)", method: "DELETE")
+    }
+
+    func checklist(_ jobID: String) async throws -> [TripChecklistItem] {
+        try await send(path: "/api/v1/itineraries/\(jobID)/checklist", as: [TripChecklistItem].self)
+    }
+
+    func createChecklistItem(_ jobID: String, input: TripChecklistItemCreate) async throws -> TripChecklistItem {
+        try await send(path: "/api/v1/itineraries/\(jobID)/checklist", method: "POST", body: encoder.encode(input), as: TripChecklistItem.self)
+    }
+
+    func updateChecklistItem(_ jobID: String, itemID: String, input: TripChecklistItemUpdate) async throws -> TripChecklistItem {
+        try await send(path: "/api/v1/itineraries/\(jobID)/checklist/\(itemID)", method: "PATCH", body: encoder.encode(input), as: TripChecklistItem.self)
+    }
+
+    func deleteChecklistItem(_ jobID: String, itemID: String) async throws {
+        try await sendWithoutResponse(path: "/api/v1/itineraries/\(jobID)/checklist/\(itemID)", method: "DELETE")
+    }
+
+    func expenses(_ jobID: String) async throws -> [TripExpense] {
+        try await send(path: "/api/v1/itineraries/\(jobID)/expenses", as: [TripExpense].self)
+    }
+
+    func createExpense(_ jobID: String, input: TripExpenseCreate) async throws -> TripExpense {
+        try await send(path: "/api/v1/itineraries/\(jobID)/expenses", method: "POST", body: encoder.encode(input), as: TripExpense.self)
+    }
+
+    func deleteExpense(_ jobID: String, expenseID: String) async throws {
+        try await sendWithoutResponse(path: "/api/v1/itineraries/\(jobID)/expenses/\(expenseID)", method: "DELETE")
+    }
+
+    func collaborators(_ jobID: String) async throws -> [TripCollaborator] {
+        try await send(path: "/api/v1/itineraries/\(jobID)/collaborators", as: [TripCollaborator].self)
+    }
+
+    func createCollaborationInvite(_ jobID: String, input: CollaborationInviteCreate) async throws -> CollaborationInvite {
+        try await send(path: "/api/v1/itineraries/\(jobID)/collaboration-invites", method: "POST", body: encoder.encode(input), as: CollaborationInvite.self)
+    }
+
+    func removeCollaborator(_ jobID: String, collaboratorID: String) async throws {
+        try await sendWithoutResponse(path: "/api/v1/itineraries/\(jobID)/collaborators/\(collaboratorID)", method: "DELETE")
+    }
+
+    func acceptCollaborationInvite(token: String) async throws -> TripCollaborator {
+        try await send(path: "/api/v1/collaboration-invites/accept", method: "POST", body: encoder.encode(CollaborationInviteAccept(token: token)), as: TripCollaborator.self)
+    }
+
+    func placeReports(_ jobID: String) async throws -> [PlaceReport] {
+        try await send(path: "/api/v1/itineraries/\(jobID)/place-reports", as: [PlaceReport].self)
+    }
+
+    func createPlaceReport(_ jobID: String, input: PlaceReportCreate) async throws -> PlaceReport {
+        try await send(path: "/api/v1/itineraries/\(jobID)/place-reports", method: "POST", body: encoder.encode(input), as: PlaceReport.self)
+    }
+
+    func deleteMyData() async throws {
+        try await sendWithoutResponse(
+            path: "/api/v1/auth/me",
+            method: "DELETE",
+            body: encoder.encode(["confirmation": "DELETE"])
+        )
+        try await credentialStore.clearCredentials()
+    }
+
+    func connectAppleAccount(identityToken: String) async throws {
+        let body = try encoder.encode(AppleIdentityRequest(identityToken: identityToken))
+        let response: TokenResponse
+        do {
+            response = try await send(
+                path: "/api/v1/auth/apple/link",
+                method: "POST",
+                body: body,
+                as: TokenResponse.self
+            )
+        } catch APIError.http(let statusCode, _, _, _) where statusCode == 409 {
+            let installationID = try await credentialStore.installationIdentifier()
+            response = try await sendAuthenticationRequest(
+                path: "/api/v1/auth/apple",
+                body: body,
+                installationID: installationID
+            )
+        }
+
+        guard let refreshToken = response.refreshToken, !refreshToken.isEmpty else {
+            throw APIError.authenticationFailed("Apple sign-in did not return a recoverable session.")
+        }
+        try await credentialStore.saveCredentials(
+            AuthCredentials(
+                accessToken: response.accessToken,
+                refreshToken: refreshToken,
+                tokenType: response.tokenType,
+                expiresAt: now().addingTimeInterval(response.expiresIn)
+            )
+        )
     }
 
     func popularItineraries() async throws -> [PopularItinerarySummary] {
@@ -254,6 +421,36 @@ actor APIClient {
         } catch {
             throw APIError.decoding
         }
+    }
+
+    private func sendWithoutResponse(
+        path: String,
+        method: String,
+        body: Data? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) async throws {
+        var credentials = try await credentialsForRequest()
+        var request = try await makeRequest(
+            path: path,
+            method: method,
+            body: body,
+            bearerToken: credentials.accessToken,
+            additionalHeaders: additionalHeaders
+        )
+
+        var (data, response) = try await perform(request)
+        if response.statusCode == 401 {
+            credentials = try await refreshCredentials(current: credentials)
+            request.setValue(
+                "Bearer \(credentials.accessToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            (data, response) = try await perform(request)
+            if response.statusCode == 401 {
+                throw APIError.unauthorized
+            }
+        }
+        try validate(response: response, data: data)
     }
 
     private func credentialsForRequest() async throws -> AuthCredentials {
@@ -408,7 +605,19 @@ actor APIClient {
         additionalHeaders: [String: String]
     ) throws -> URLRequest {
         let normalizedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        let url = configuration.baseURL.appending(path: normalizedPath)
+        let pathAndQuery = normalizedPath.split(
+            separator: "?",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        var url = configuration.baseURL.appending(path: String(pathAndQuery[0]))
+        if pathAndQuery.count == 2,
+           var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.percentEncodedQuery = String(pathAndQuery[1])
+            if let resolved = components.url {
+                url = resolved
+            }
+        }
         var request = URLRequest(url: url, timeoutInterval: configuration.requestTimeout)
         request.httpMethod = method
         request.httpBody = body

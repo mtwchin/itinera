@@ -4,11 +4,39 @@ import SwiftUI
 struct ItineraryView: View {
     @Environment(\.itineraTheme) private var theme
 
-    let itinerary: Itinerary
+    @State private var itinerary: Itinerary
+    let tripID: String?
+    let tripTitle: String?
+    let tripStartDate: String?
+    let tripEndDate: String?
 
     @State private var selectedDay = 1
     @State private var selectedActivity: Activity?
     @State private var isShowingGoogleMapsExport = false
+    @State private var transportMode: TripTransportMode = .walking
+    @State private var routeLegs: [DayRouteLeg] = []
+    @State private var routeState: RouteLoadState = .idle
+    @State private var calendarStatusMessage: String?
+    @State private var calendarErrorMessage: String?
+    @State private var currentVersion: Int
+    @State private var isShowingEditor = false
+    @State private var isShowingTripTools = false
+
+    init(
+        itinerary: Itinerary,
+        tripID: String? = nil,
+        tripTitle: String? = nil,
+        tripStartDate: String? = nil,
+        tripEndDate: String? = nil,
+        tripVersion: Int = 1
+    ) {
+        _itinerary = State(initialValue: itinerary)
+        self.tripID = tripID
+        self.tripTitle = tripTitle
+        self.tripStartDate = tripStartDate
+        self.tripEndDate = tripEndDate
+        _currentVersion = State(initialValue: tripVersion)
+    }
 
     private var day: ItineraryDay? {
         itinerary.itinerary.first { $0.day == selectedDay }
@@ -27,9 +55,24 @@ struct ItineraryView: View {
                             message: "A paced overview of the day's stops."
                         )
 
+                        if let calendarStatusMessage {
+                            ItineraStatusBanner(
+                                message: calendarStatusMessage,
+                                kind: .success
+                            )
+                        }
+                        if let calendarErrorMessage {
+                            ItineraStatusBanner(
+                                message: calendarErrorMessage,
+                                kind: .error
+                            )
+                        }
+
                         daySelector
 
                         mapCard(for: day)
+
+                        travelLegsCard(for: day)
 
                         HStack(spacing: 8) {
                             ItineraPill(
@@ -67,12 +110,48 @@ struct ItineraryView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    isShowingGoogleMapsExport = true
+                Menu {
+                    Button {
+                        isShowingGoogleMapsExport = true
+                    } label: {
+                        Label("Export day to Google Maps", systemImage: "arrow.up.right.square")
+                    }
+
+                    ItineraryShareButton(
+                        itinerary: itinerary,
+                        tripTitle: resolvedTripTitle,
+                        dateRange: tripDateRange
+                    )
+
+                    ItineraryPDFShareButton(
+                        itinerary: itinerary,
+                        tripTitle: resolvedTripTitle,
+                        dateRange: tripDateRange
+                    )
+
+                    Button {
+                        Task { await exportToCalendar() }
+                    } label: {
+                        Label("Add stops to Calendar", systemImage: "calendar.badge.plus")
+                    }
+                    .disabled(calendarStartDate == nil)
+
+                    if tripID != nil {
+                        Divider()
+                        Button {
+                            isShowingEditor = true
+                        } label: {
+                            Label("Edit itinerary", systemImage: "slider.horizontal.3")
+                        }
+                        Button {
+                            isShowingTripTools = true
+                        } label: {
+                            Label("Trip tools", systemImage: "checklist")
+                        }
+                    }
                 } label: {
-                    Label("Export day to Google Maps", systemImage: "arrow.up.right.square")
+                    Label("Trip actions", systemImage: "ellipsis.circle")
                 }
-                .disabled(day == nil)
             }
         }
         .onAppear {
@@ -80,9 +159,14 @@ struct ItineraryView: View {
         }
         .onChange(of: selectedDay) { _, _ in
             selectedActivity = nil
+            routeLegs = []
+            routeState = .idle
+        }
+        .task(id: routeRequestID) {
+            await loadRoute()
         }
         .sheet(item: $selectedActivity) { activity in
-            ActivityDetailSheet(activity: activity)
+            ActivityDetailSheet(activity: activity, jobID: tripID)
                 .environment(\.itineraTheme, theme)
         }
         .sheet(isPresented: $isShowingGoogleMapsExport) {
@@ -90,6 +174,66 @@ struct ItineraryView: View {
                 GoogleMapsExportSheet(day: day)
                     .environment(\.itineraTheme, theme)
             }
+        }
+        .sheet(isPresented: $isShowingEditor) {
+            if let tripID {
+                NavigationStack {
+                    TripEditorView(
+                        jobID: tripID,
+                        tripTitle: resolvedTripTitle,
+                        itinerary: itinerary,
+                        version: currentVersion
+                    ) { revised, version in
+                        itinerary = revised
+                        currentVersion = version
+                    }
+                }
+                .environment(\.itineraTheme, theme)
+            }
+        }
+        .sheet(isPresented: $isShowingTripTools) {
+            if let tripID {
+                NavigationStack {
+                    TripToolsView(jobID: tripID, tripTitle: resolvedTripTitle)
+                }
+                .environment(\.itineraTheme, theme)
+            }
+        }
+    }
+
+    private var resolvedTripTitle: String {
+        let cleaned = tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.flatMap { $0.isEmpty ? nil : $0 }
+            ?? day?.theme
+            ?? "Itinera trip"
+    }
+
+    private var calendarStartDate: Date? {
+        TripLibraryOrganizer.localDate(tripStartDate ?? itinerary.itinerary.first?.date)
+    }
+
+    private var tripDateRange: String? {
+        switch (tripStartDate, tripEndDate) {
+        case let (start?, end?): "\(start) → \(end)"
+        case let (start?, nil): start
+        default: nil
+        }
+    }
+
+    @MainActor
+    private func exportToCalendar() async {
+        guard let calendarStartDate else { return }
+        calendarStatusMessage = nil
+        calendarErrorMessage = nil
+        do {
+            let count = try await ItineraryCalendarExporter().export(
+                itinerary: itinerary,
+                tripStartDate: calendarStartDate,
+                calendarTitle: resolvedTripTitle
+            )
+            calendarStatusMessage = "Added \(count) \(count == 1 ? "stop" : "stops") to Calendar."
+        } catch {
+            calendarErrorMessage = error.localizedDescription
         }
     }
 
@@ -141,6 +285,7 @@ struct ItineraryView: View {
     private func mapCard(for day: ItineraryDay) -> some View {
         DayMapView(
             activities: day.activities,
+            routeLegs: routeLegs,
             selectedActivity: $selectedActivity
         )
             .frame(height: 270)
@@ -154,6 +299,101 @@ struct ItineraryView: View {
                     .stroke(theme.border.opacity(0.9), lineWidth: 1)
             }
             .shadow(color: theme.shadow, radius: 18, y: 8)
+    }
+
+    private var routeRequestID: String {
+        "\(selectedDay)-\(transportMode.rawValue)-\(day?.activities.map(\.id).joined(separator: "|") ?? "empty")"
+    }
+
+    private func travelLegsCard(for day: ItineraryDay) -> some View {
+        ItineraSurface {
+            VStack(alignment: .leading, spacing: 14) {
+                ItineraSectionHeading(
+                    number: "GETTING AROUND",
+                    title: "Live travel legs",
+                    message: "Times and paths come from Apple Maps and may change with local conditions."
+                )
+
+                Picker("Travel mode", selection: $transportMode) {
+                    ForEach(TripTransportMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch routeState {
+                case .idle, .loading:
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Checking live routes…")
+                            .font(.subheadline)
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    .frame(minHeight: 44)
+                case .loaded:
+                    if routeLegs.isEmpty {
+                        Text(day.activities.count < 2 ? "Add another stop to compare travel time." : "No travel legs are needed.")
+                            .font(.subheadline)
+                            .foregroundStyle(theme.secondaryText)
+                    } else {
+                        ForEach(Array(routeLegs.enumerated()), id: \.element.id) { index, leg in
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: transportMode.systemImage)
+                                    .foregroundStyle(theme.route)
+                                    .frame(width: 28, height: 28)
+                                    .background(theme.route.opacity(0.1), in: Circle())
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Stop \(index + 1) → \(index + 2)")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(theme.secondaryText)
+                                    Text("\(leg.travelTimeLabel) · \(leg.distanceLabel)")
+                                        .font(.headline)
+                                        .foregroundStyle(theme.primaryText)
+                                    Text("\(leg.originName) to \(leg.destinationName)")
+                                        .font(.caption)
+                                        .foregroundStyle(theme.secondaryText)
+                                        .lineLimit(2)
+                                }
+
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                case .fallback:
+                    ItineraStatusBanner(
+                        message: "Live directions aren't available right now. The map still shows your stop order.",
+                        kind: .warning
+                    )
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadRoute() async {
+        guard let day else {
+            routeLegs = []
+            routeState = .loaded
+            return
+        }
+
+        routeState = .loading
+        do {
+            let loaded = try await DayRoutePlanner.route(
+                activities: day.activities,
+                mode: transportMode
+            )
+            try Task.checkCancellation()
+            routeLegs = loaded
+            routeState = .loaded
+        } catch is CancellationError {
+            return
+        } catch {
+            routeLegs = []
+            routeState = .fallback
+        }
     }
 
     private var tripNotes: some View {
@@ -284,6 +524,7 @@ struct DayMapView: View {
     @Environment(\.itineraTheme) private var theme
 
     let activities: [Activity]
+    let routeLegs: [DayRouteLeg]
     @Binding var selectedActivity: Activity?
 
     @State private var cameraPosition: MapCameraPosition = .automatic
@@ -299,7 +540,19 @@ struct DayMapView: View {
 
     var body: some View {
         Map(position: $cameraPosition) {
-            if coordinates.count > 1 {
+            if !routeLegs.isEmpty {
+                ForEach(routeLegs) { leg in
+                    MapPolyline(coordinates: leg.coordinates)
+                        .stroke(
+                            theme.route,
+                            style: StrokeStyle(
+                                lineWidth: 4,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
+                        )
+                }
+            } else if coordinates.count > 1 {
                 MapPolyline(coordinates: coordinates)
                     .stroke(
                         theme.route,
@@ -354,6 +607,13 @@ struct DayMapView: View {
         }
     }
 
+}
+
+private enum RouteLoadState {
+    case idle
+    case loading
+    case loaded
+    case fallback
 }
 
 struct ActivityTimelineRow: View {
@@ -446,6 +706,9 @@ private struct ActivityDetailSheet: View {
     @Environment(\.itineraTheme) private var theme
 
     let activity: Activity
+    let jobID: String?
+    @State private var isReportingPlace = false
+    @State private var reportStatus: String?
 
     var body: some View {
         NavigationStack {
@@ -488,6 +751,56 @@ private struct ActivityDetailSheet: View {
                                     .font(.subheadline)
                                     .foregroundStyle(theme.primaryText)
 
+                                if let openingHours = activity.openingHours, !openingHours.isEmpty {
+                                    detailRow(
+                                        title: "Hours",
+                                        value: openingHours.joined(separator: "\n"),
+                                        systemImage: "clock"
+                                    )
+                                }
+
+                                if let estimatedCost = activity.estimatedCost, !estimatedCost.isEmpty {
+                                    detailRow(
+                                        title: "Estimated cost",
+                                        value: estimatedCost,
+                                        systemImage: "banknote"
+                                    )
+                                }
+
+                                if let accessibilityNotes = activity.accessibilityNotes,
+                                   !accessibilityNotes.isEmpty {
+                                    detailRow(
+                                        title: "Accessibility",
+                                        value: accessibilityNotes,
+                                        systemImage: "accessibility"
+                                    )
+                                }
+
+                                if let phone = activity.phone,
+                                   let phoneURL = URL(string: "tel:\(phone.filter { $0.isNumber || $0 == "+" })") {
+                                    Link(destination: phoneURL) {
+                                        Label("Call \(phone)", systemImage: "phone.fill")
+                                    }
+                                    .font(.subheadline.weight(.semibold))
+                                }
+
+                                if let reservationURL = activity.reservationUrl,
+                                   let url = URL(string: reservationURL) {
+                                    Link(destination: url) {
+                                        Label("Reservation options", systemImage: "calendar.badge.plus")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(theme.accent)
+                                }
+
+                                if let websiteURL = activity.websiteUrl,
+                                   let url = URL(string: websiteURL) {
+                                    Link(destination: url) {
+                                        Label("Visit website", systemImage: "safari")
+                                    }
+                                    .font(.subheadline.weight(.semibold))
+                                }
+
                                 Button(action: openInMaps) {
                                     Label(
                                         "Open in Apple Maps",
@@ -495,6 +808,20 @@ private struct ActivityDetailSheet: View {
                                     )
                                 }
                                 .buttonStyle(ItineraPrimaryButtonStyle())
+
+                                if jobID != nil {
+                                    Button {
+                                        isReportingPlace = true
+                                    } label: {
+                                        Label("Report inaccurate place", systemImage: "exclamationmark.bubble")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(theme.warning)
+                                }
+
+                                if let reportStatus {
+                                    ItineraStatusBanner(message: reportStatus, kind: .success)
+                                }
                             }
                         }
                     }
@@ -513,6 +840,36 @@ private struct ActivityDetailSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .sheet(isPresented: $isReportingPlace) {
+            if let jobID {
+                NavigationStack {
+                    PlaceReportSheet(jobID: jobID, activity: activity) {
+                        reportStatus = "Thanks—this place was flagged for review."
+                    }
+                }
+                .environment(\.itineraTheme, theme)
+            }
+        }
+    }
+
+    private func detailRow(
+        title: String,
+        value: String,
+        systemImage: String
+    ) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText)
+                Text(value)
+                    .font(.subheadline)
+                    .foregroundStyle(theme.primaryText)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(theme.route)
+        }
     }
 
     private func openInMaps() {

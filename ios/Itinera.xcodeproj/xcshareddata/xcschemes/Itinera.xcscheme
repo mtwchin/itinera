@@ -35,6 +35,20 @@
                ReferencedContainer = "container:Itinera.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "1E1601E8A1568DC8DA4D0101"
+               BuildableName = "ItineraWidget.appex"
+               BlueprintName = "ItineraWidget"
+               ReferencedContainer = "container:Itinera.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction

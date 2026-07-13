@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,8 @@ from backend.db.repo import (
     JobClaim,
     canonical_request_hash,
     create_or_replay_job,
+    finish_job_sync,
+    materialize_activity_ids,
 )
 from backend.workers.outbox_dispatcher import dispatch_outbox_batch
 
@@ -35,6 +38,57 @@ def test_canonical_request_hash_is_order_independent_and_body_sensitive():
     changed = {"city": "Porto", "nested": {"a": 1, "b": 2}}
     assert canonical_request_hash(first) == canonical_request_hash(reordered)
     assert canonical_request_hash(first) != canonical_request_hash(changed)
+
+
+def test_worker_completion_reissues_stop_ids_for_the_job_namespace():
+    itinerary = {
+        "itinerary": [
+            {
+                "day": 1,
+                "activities": [
+                    {
+                        "id": "composer-place-id",
+                        "name": "Museum",
+                        "address": "Museum Street",
+                        "coordinates": {"lat": 38.71, "lng": -9.14},
+                    },
+                    {
+                        "id": "composer-place-id",
+                        "name": "Museum",
+                        "address": "Museum Street",
+                        "coordinates": {"lat": 38.71, "lng": -9.14},
+                    },
+                ],
+            }
+        ]
+    }
+    expected = materialize_activity_ids(
+        deepcopy(itinerary),
+        trip_namespace="job-1",
+        force_reissue=True,
+    )
+    captured: dict = {}
+
+    async def finish(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    with patch("backend.db.repo._finish_job", side_effect=finish):
+        persisted = finish_job_sync(
+            job_id="job-1",
+            run_token="lease-token",
+            status=JobStatus.succeeded,
+            result=itinerary,
+        )
+
+    assert persisted is True
+    assert captured["result"] == expected
+    stop_ids = [
+        item["id"]
+        for day in captured["result"]["itinerary"]
+        for item in day["activities"]
+    ]
+    assert len(stop_ids) == len(set(stop_ids))
 
 
 @pytest.mark.asyncio
