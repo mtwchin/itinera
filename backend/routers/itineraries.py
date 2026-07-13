@@ -7,11 +7,19 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import current_user, enforce_generation_rate_limit
 from backend.cache.redis import get_redis
+from backend.cache.terminal import (
+    get_coherent_terminal_status,
+    itinerary_stream_channel,
+    refresh_terminal_status,
+    status_from_row,
+    terminal_result_key,
+)
 from backend.db.models import Itinerary, User
 from backend.db.repo import (
     IdempotencyConflictError,
@@ -39,14 +47,6 @@ from backend.schemas.itinerary import (
 router = APIRouter(tags=["itineraries"])
 
 
-def _stream_channel(job_id: str) -> str:
-    return f"job:{job_id}:events"
-
-
-def _result_key(job_id: str) -> str:
-    return f"job:{job_id}:result"
-
-
 def _job_urls(job_id: str) -> tuple[str, str]:
     base = f"/api/v1/itineraries/{job_id}"
     return f"{base}/stream", base
@@ -64,16 +64,6 @@ async def _accessible_job_or_404(
             status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found"
         )
     return row
-
-
-def _status_from_row(row: Itinerary) -> JobStatusResponse:
-    return JobStatusResponse(
-        job_id=row.job_id,
-        status=row.status.value,
-        result=row.result,
-        error=row.error,
-        version=row.version or 1,
-    )
 
 
 def _popular_summary(listing: PopularItineraryListing) -> PopularItinerarySummary:
@@ -250,6 +240,7 @@ async def save_popular_itinerary(
         )
     row, created = saved
     await session.commit()
+    await refresh_terminal_status(row)
     return SavedPublicItineraryResponse(
         created=created,
         saved_itinerary=SavedItinerary.from_row(row),
@@ -264,20 +255,10 @@ async def get_itinerary(
 ) -> JobStatusResponse:
     row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
 
-    # PostgreSQL is checked first to authorize owner/collaborator access. Redis is only a
-    # response cache and can never grant access to a job.
-    try:
-        raw = await get_redis().get(_result_key(job_id))
-    except RedisError:
-        raw = None
-    if raw:
-        try:
-            cached = JobStatusResponse(**json.loads(raw))
-            if cached.job_id == job_id:
-                return cached
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    return _status_from_row(row)
+    # PostgreSQL authorizes the read and supplies the version/status coherence
+    # token. Redis can accelerate a response but can never supersede that row.
+    cached = await get_coherent_terminal_status(row)
+    return cached or status_from_row(row)
 
 
 @router.get("/itineraries/{job_id}/stream")
@@ -287,7 +268,7 @@ async def stream_itinerary(
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     row = await _accessible_job_or_404(session, job_id=job_id, user_id=user.id)
-    initial = _status_from_row(row).model_dump(mode="json")
+    initial = status_from_row(row).model_dump(mode="json")
     return StreamingResponse(
         _event_source(job_id, initial),
         media_type="text/event-stream",
@@ -304,7 +285,7 @@ async def _event_source(job_id: str, initial: dict) -> AsyncIterator[bytes]:
     redis = get_redis()
     pubsub = redis.pubsub()
     try:
-        await pubsub.subscribe(_stream_channel(job_id))
+        await pubsub.subscribe(itinerary_stream_channel(job_id))
     except RedisError:
         payload = json.dumps(initial)
         yield f"event: status\ndata: {payload}\n\n".encode()
@@ -312,10 +293,20 @@ async def _event_source(job_id: str, initial: dict) -> AsyncIterator[bytes]:
     try:
         # Subscribe before checking the terminal cache so completion cannot
         # happen in the gap between those operations.
-        result_raw = await redis.get(_result_key(job_id))
+        result_raw = await redis.get(terminal_result_key(job_id))
         if result_raw:
-            yield f"event: result\ndata: {result_raw}\n\n".encode()
-            return
+            try:
+                cached = JobStatusResponse.model_validate_json(result_raw)
+            except (TypeError, ValidationError):
+                cached = None
+            if (
+                cached is not None
+                and cached.job_id == job_id
+                and cached.version == initial["version"]
+                and cached.status in ("succeeded", "failed")
+            ):
+                yield f"event: result\ndata: {cached.model_dump_json()}\n\n".encode()
+                return
 
         async for message in pubsub.listen():
             if message is None or message.get("type") != "message":
@@ -334,7 +325,7 @@ async def _event_source(job_id: str, initial: dict) -> AsyncIterator[bytes]:
         yield f"event: status\ndata: {payload}\n\n".encode()
     finally:
         try:
-            await pubsub.unsubscribe(_stream_channel(job_id))
+            await pubsub.unsubscribe(itinerary_stream_channel(job_id))
             await pubsub.close()
         except RedisError:
             pass

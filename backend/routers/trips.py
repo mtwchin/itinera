@@ -9,6 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import current_user
+from backend.cache.terminal import (
+    invalidate_terminal_statuses,
+    refresh_terminal_status,
+)
 from backend.db.models import ChecklistItem, Expense, PlaceReport, Reservation, User
 from backend.db.repo import (
     InvalidRevisionError,
@@ -105,6 +109,7 @@ async def delete_trip(
     if not await delete_owned_itinerary(session, job_id=job_id, user_id=user.id):
         raise _not_found()
     await session.commit()
+    await invalidate_terminal_statuses([job_id])
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -129,6 +134,7 @@ async def duplicate_trip(
     if row is None:
         raise _not_found()
     await session.commit()
+    await refresh_terminal_status(row)
     return SavedItinerary.from_row(row)
 
 
@@ -170,8 +176,9 @@ async def create_revision(
         ) from exc
     if revised is None:
         raise _not_found()
-    _, revision = revised
+    row, revision = revised
     await session.commit()
+    await refresh_terminal_status(row)
     return _revision_response(job_id, revision)
 
 

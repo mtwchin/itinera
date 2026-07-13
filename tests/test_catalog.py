@@ -338,11 +338,17 @@ def test_put_saved_is_idempotent_and_commits_owned_snapshot(catalog_client):
     client, session, user = catalog_client
     public = public_row()
     owned = saved_row(public, user)
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
         "backend.routers.itineraries.save_public_itinerary_for_user",
         new_callable=AsyncMock,
         return_value=(owned, False),
-    ) as save_repo:
+    ) as save_repo, patch(
+        "backend.routers.itineraries.refresh_terminal_status",
+        new_callable=AsyncMock,
+        side_effect=lambda _row: order.append("cache"),
+    ) as refresh_cache:
         response = client.put(f"/api/v1/popular-itineraries/{public.id}/saved")
 
     assert response.status_code == 200
@@ -357,6 +363,8 @@ def test_put_saved_is_idempotent_and_commits_owned_snapshot(catalog_client):
         user_id=user.id,
     )
     session.commit.assert_awaited_once()
+    refresh_cache.assert_awaited_once_with(owned)
+    assert order == ["commit", "cache"]
 
 
 def test_popular_routes_require_bearer_authentication():
