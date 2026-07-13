@@ -35,7 +35,7 @@ enum AppAppearance: String, CaseIterable, Hashable, Identifiable, Sendable {
 }
 
 enum SettingsConsentVersion {
-    static let current = 1
+    static let current = 2
 }
 
 /// Versioned acknowledgement for the data that is sent when Itinera builds a trip.
@@ -104,7 +104,7 @@ struct AIDataDisclosure: Equatable, Sendable {
 
     static let current = AIDataDisclosure(
         version: SettingsConsentVersion.current,
-        summary: "Itinera sends the trip details you enter to its itinerary service so AI can create your plan.",
+        summary: "For hosted generation, Itinera sends the trip details you enter to OpenAI so AI can create your plan. Local development may use a private Ollama model instead.",
         sentItems: [
             "Destination, dates, accommodation, group size, budget, and preferences",
             "The text you enter in food and must-do fields",

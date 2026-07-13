@@ -162,6 +162,33 @@ def test_pipeline_rejects_anthropic_provider_without_key():
     fetch_trends.assert_not_called()
 
 
+def test_pipeline_rejects_openai_provider_without_key():
+    from backend.agents import pipeline
+
+    with patch.object(pipeline, "get_settings") as settings, patch.object(
+        pipeline, "fetch_trending_places"
+    ) as fetch_trends:
+        settings.return_value = MagicMock(
+            env="test",
+            tiktok_api_key=None,
+            trends_provider="synthetic",
+            trends_feed_url=None,
+            trends_feed_api_key=None,
+            google_maps_api_key=None,
+            maps_provider="synthetic",
+            apple_maps_team_id=None,
+            apple_maps_key_id=None,
+            apple_maps_private_key=None,
+            itinerary_composer_provider="openai",
+            openai_api_key=None,
+            openai_model="gpt-5.6-luna",
+            openai_request_timeout_seconds=180,
+        )
+        with pytest.raises(RuntimeError, match="requires OPENAI_API_KEY"):
+            pipeline.run_pipeline(SAMPLE_REQUEST)
+    fetch_trends.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [

@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from openai import OpenAIError
 
 from backend.agents.composers import (
     AnthropicComposer,
     ComposerError,
     OllamaComposer,
+    OpenAIComposer,
     create_itinerary_composer,
     validate_composer_configuration,
 )
@@ -89,6 +91,8 @@ def test_ollama_is_the_default_composer():
 
     assert settings.itinerary_composer_provider == "ollama"
     assert settings.ollama_model == "qwen2.5:7b-instruct"
+    assert settings.openai_model == "gpt-5.6-luna"
+    assert settings.openai_request_timeout_seconds == 180
     assert isinstance(create_itinerary_composer(settings), OllamaComposer)
 
 
@@ -256,6 +260,95 @@ def test_anthropic_selection_requires_a_key():
         validate_composer_configuration(
             _settings(itinerary_composer_provider="anthropic", anthropic_api_key=None)
         )
+
+
+def test_openai_composer_uses_responses_structured_parse_without_storage():
+    response = MagicMock(output_parsed=Itinerary.model_validate(ITINERARY))
+    client = MagicMock()
+    client.responses.parse.return_value = response
+
+    with patch("backend.agents.composers.OpenAI", return_value=client) as sdk:
+        composer = OpenAIComposer("openai-test-key", "gpt-5.6-luna", 45)
+        result = composer.compose(REQUEST, PLACES)
+
+    sdk.assert_called_once_with(api_key="openai-test-key", timeout=45)
+    assert result.itinerary[0].activities[0].name == "Time Out Market"
+    call = client.responses.parse.call_args.kwargs
+    assert call["model"] == "gpt-5.6-luna"
+    assert call["text_format"] is Itinerary
+    assert call["store"] is False
+    assert call["input"][0]["role"] == "system"
+    assert "Lisbon" in call["input"][1]["content"]
+    assert "Time Out Market" in call["input"][1]["content"]
+
+
+def test_openai_output_uses_the_same_semantic_grounding_validation():
+    hallucinated = deepcopy(ITINERARY)
+    hallucinated["itinerary"][0]["activities"][0]["name"] = "Imaginary Museum"
+    response = MagicMock(output_parsed=Itinerary.model_validate(hallucinated))
+    client = MagicMock()
+    client.responses.parse.return_value = response
+
+    with patch("backend.agents.composers.OpenAI", return_value=client):
+        composer = OpenAIComposer("openai-test-key", "gpt-5.6-luna")
+
+    with pytest.raises(ComposerError, match="semantic validation: ungrounded activity"):
+        composer.compose(REQUEST, PLACES)
+
+
+def test_openai_factory_uses_configured_key_model_and_timeout():
+    client = MagicMock()
+    with patch("backend.agents.composers.OpenAI", return_value=client) as sdk:
+        composer = create_itinerary_composer(
+            _settings(
+                itinerary_composer_provider="openai",
+                openai_api_key="project-secret",
+                openai_model="gpt-5.6-luna",
+                openai_request_timeout_seconds=73,
+            )
+        )
+
+    assert isinstance(composer, OpenAIComposer)
+    sdk.assert_called_once_with(api_key="project-secret", timeout=73)
+    assert composer.model == "gpt-5.6-luna"
+
+
+def test_openai_selection_requires_key_and_nonblank_model():
+    with pytest.raises(RuntimeError, match="requires OPENAI_API_KEY"):
+        validate_composer_configuration(
+            _settings(itinerary_composer_provider="openai", openai_api_key=None)
+        )
+
+    with pytest.raises(RuntimeError, match="OPENAI_MODEL must not be empty"):
+        validate_composer_configuration(
+            _settings(
+                itinerary_composer_provider="openai",
+                openai_api_key="project-secret",
+                openai_model="   ",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "provider_result",
+    [OpenAIError("sensitive provider detail"), MagicMock(output_parsed=None)],
+)
+def test_openai_failures_raise_sanitized_provider_neutral_error(provider_result):
+    client = MagicMock()
+    if isinstance(provider_result, Exception):
+        client.responses.parse.side_effect = provider_result
+    else:
+        client.responses.parse.return_value = provider_result
+
+    with patch("backend.agents.composers.OpenAI", return_value=client):
+        composer = OpenAIComposer("openai-test-key", "gpt-5.6-luna")
+
+    with pytest.raises(ComposerError) as exc_info:
+        composer.compose(REQUEST, PLACES)
+
+    message = str(exc_info.value)
+    assert "OpenAI model 'gpt-5.6-luna' did not return a valid itinerary" == message
+    assert "sensitive provider detail" not in message
 
 
 @pytest.mark.parametrize("base_url", ["", "localhost:11434", "ftp://localhost/api"])

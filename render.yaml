@@ -50,9 +50,11 @@ services:
           name: itinera-redis
           property: connectionString
       - key: ITINERARY_COMPOSER_PROVIDER
-        value: ollama
-      # Render cannot reach the developer's laptop. Point this at a private,
-      # authenticated Ollama service before enabling production generation.
+        value: openai
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      # Retained for deployments that switch back to a private, authenticated
+      # Ollama service. Render cannot reach the developer's laptop.
       - key: OLLAMA_BASE_URL
         sync: false
       - key: OLLAMA_API_KEY
@@ -83,7 +85,58 @@ services:
     dockerfilePath: ./Dockerfile
     preDeployCommand: alembic upgrade head
     dockerCommand: celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4
-    envVars: *shared_env
+    # This list is intentionally explicit so the model-provider credential is
+    # available only to the process that calls the provider.
+    envVars:
+      - key: ENV
+        value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itinera-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: itinera-redis
+          property: connectionString
+      - key: ITINERARY_COMPOSER_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: OLLAMA_MODEL
+        value: qwen2.5:7b-instruct
+      - key: AUTH_JWT_SECRET
+        sync: false
+      - key: TRENDS_PROVIDER
+        value: http
+      - key: TRENDS_FEED_URL
+        sync: false
+      - key: TRENDS_FEED_API_KEY
+        sync: false
+      - key: MAPS_PROVIDER
+        value: apple
+      - key: APPLE_MAPS_TEAM_ID
+        sync: false
+      - key: APPLE_MAPS_KEY_ID
+        sync: false
+      - key: APPLE_MAPS_PRIVATE_KEY
+        sync: false
 
   - type: worker
     name: itinera-outbox

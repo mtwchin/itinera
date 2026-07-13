@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import anthropic
 import requests
+from openai import OpenAI, OpenAIError
 from pydantic import ValidationError
 
 from backend.schemas.itinerary import GenerateItineraryRequest, Itinerary
@@ -278,6 +279,40 @@ class AnthropicComposer:
         return validate_itinerary_semantics(response.parsed_output, request, places)
 
 
+class OpenAIComposer:
+    """Compose through the OpenAI Responses API with structured output."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: int = 180) -> None:
+        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds)
+        self.model = model
+
+    def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        try:
+            response = self.client.responses.parse(
+                model=self.model,
+                input=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise travel planner. Use only supplied places "
+                            "and return a schema-valid itinerary."
+                        ),
+                    },
+                    {"role": "user", "content": _prompt(request, places)},
+                ],
+                text_format=Itinerary,
+                store=False,
+            )
+            itinerary = response.output_parsed
+            if not isinstance(itinerary, Itinerary):
+                raise TypeError("OpenAI response did not contain a parsed itinerary")
+            return validate_itinerary_semantics(itinerary, request, places)
+        except (OpenAIError, ValidationError, KeyError, TypeError, ValueError) as exc:
+            raise ComposerError(
+                f"OpenAI model {self.model!r} did not return a valid itinerary"
+            ) from exc
+
+
 def validate_composer_configuration(settings) -> None:
     """Fail early with an actionable error for an unusable composer."""
 
@@ -286,6 +321,15 @@ def validate_composer_configuration(settings) -> None:
             raise RuntimeError(
                 "ITINERARY_COMPOSER_PROVIDER=anthropic requires ANTHROPIC_API_KEY"
             )
+        return
+
+    if settings.itinerary_composer_provider == "openai":
+        if not settings.openai_api_key or not settings.openai_api_key.strip():
+            raise RuntimeError(
+                "ITINERARY_COMPOSER_PROVIDER=openai requires OPENAI_API_KEY"
+            )
+        if not settings.openai_model.strip():
+            raise RuntimeError("OPENAI_MODEL must not be empty")
         return
 
     if not settings.ollama_model.strip():
@@ -303,6 +347,12 @@ def create_itinerary_composer(settings) -> ItineraryComposer:
     validate_composer_configuration(settings)
     if settings.itinerary_composer_provider == "anthropic":
         return AnthropicComposer(settings.anthropic_api_key, settings.anthropic_model)
+    if settings.itinerary_composer_provider == "openai":
+        return OpenAIComposer(
+            settings.openai_api_key.strip(),
+            settings.openai_model.strip(),
+            settings.openai_request_timeout_seconds,
+        )
     return OllamaComposer(
         settings.ollama_base_url,
         settings.ollama_model,

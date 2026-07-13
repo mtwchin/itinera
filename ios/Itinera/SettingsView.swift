@@ -497,7 +497,7 @@ struct AIDataDisclosureView: View {
                     )
 
                     disclosureCard(
-                        title: "Sent to Itinera",
+                        title: "Shared for AI generation",
                         systemImage: "arrow.up.forward.circle.fill",
                         items: disclosure.sentItems,
                         tint: theme.warning

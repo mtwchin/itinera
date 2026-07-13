@@ -31,7 +31,7 @@ final class SettingsPreferencesTests: XCTestCase {
     func testOutdatedDisclosureAcceptanceRequiresConsentAgain() {
         let defaults = makeDefaults()
         defaults.set(
-            SettingsPreferences.currentConsentVersion - 1,
+            1,
             forKey: "settings.aiDataConsent.acceptedVersion"
         )
 
@@ -42,6 +42,8 @@ final class SettingsPreferencesTests: XCTestCase {
             AIDataDisclosure.current.version,
             SettingsPreferences.currentConsentVersion
         )
+        XCTAssertEqual(SettingsPreferences.currentConsentVersion, 2)
+        XCTAssertTrue(AIDataDisclosure.current.summary.contains("OpenAI"))
     }
 
     func testResetWithdrawsConsentAndRestoresDefaults() {
