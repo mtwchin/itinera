@@ -15,7 +15,7 @@ SwiftUI app
   -> outbox dispatcher -> Celery queue -> leased generation workers
        -> licensed normalized trends feed
        -> Apple Maps Server API
-       -> swappable structured composer (local Ollama by default)
+       -> swappable structured composer (OpenAI prototype or local Ollama)
 ```
 
 - `ios/` — iOS 17+ SwiftUI app generated with XcodeGen.
@@ -64,9 +64,30 @@ including the `group.com.itinera.shared` App Group on both targets.
 Docker is the simplest way to run Postgres, Redis, Jaeger, the API, the outbox
 dispatcher, and the worker.
 
-Itinerary composition defaults to local Ollama, so development does not need a
-personal cloud-model key. Install/start Ollama on the host and pull the model
-once:
+For the current hosted-AI prototype, keep a personal OpenAI API key only in the
+untracked backend `.env` file. The iOS app never receives the provider key; it
+calls the authenticated Itinera API and the worker calls OpenAI:
+
+```bash
+cp .env.example .env
+# Edit .env locally:
+# ITINERARY_COMPOSER_PROVIDER=openai
+# OPENAI_API_KEY=your-key-from-the-OpenAI-dashboard
+```
+
+Do not paste the key into Swift, an Xcode build setting, `Info.plist`, or a
+committed configuration file. Rotate it immediately if it is ever exposed.
+`OPENAI_MODEL` is independently configurable, so changing models later does
+not alter the iOS or HTTP API contracts.
+
+Hosted generation shares the trip fields listed in the app's versioned AI data
+disclosure with OpenAI for itinerary composition. The worker disables response
+storage, and changing the provider or transmitted data requires a disclosure
+review and consent-version bump before release.
+
+Local Ollama remains a keyless development alternative. Select
+`ITINERARY_COMPOSER_PROVIDER=ollama`, then install/start Ollama on the host and
+pull the model once:
 
 ```bash
 ollama pull qwen2.5:7b-instruct
@@ -77,12 +98,12 @@ Ollama serves its local API on port `11434`. The Compose worker reaches that
 host process through `host.docker.internal`; do not expose the unauthenticated
 local Ollama port to the public internet.
 
-This Ollama setup is a zero-cloud-cost development path, not the production
-scale target. The worker calls a provider-neutral composer boundary, so a later
-move to a private GPU pool or hosted inference endpoint does not change the iOS
-or HTTP API contracts. Before a public beta, load-test the selected inference
-deployment, add bounded retries and quality/grounding checks, and scale workers
-against measured generation latency.
+The worker calls a provider-neutral composer boundary, so the planned move from
+a personal prototype credential to a project-owned production account, gateway,
+or private inference deployment does not change the iOS or HTTP API contracts.
+Before a public beta, use project-scoped credentials and budgets, load-test the
+selected inference deployment, add bounded retries and quality/grounding checks,
+and scale workers against measured generation latency.
 
 ```bash
 cp .env.example .env
@@ -128,8 +149,8 @@ mobile API:
 
 | Environment | Trends | Maps | Composer |
 |---|---|---|---|
-| Local/test | `synthetic` | `synthetic` | `ollama` |
-| Optional hosted development | `synthetic` | `synthetic` | `anthropic` |
+| Local/test | `synthetic` | `synthetic` | `openai` prototype or `ollama` |
+| Optional hosted development | `synthetic` | `synthetic` | `openai` or `anthropic` |
 | Production | `http` licensed feed | `apple` Maps Server API | explicitly selected deployment provider |
 
 Synthetic results carry `source=synthetic` and are deterministic development
@@ -140,9 +161,10 @@ credentials. TikTok Research and Google geocoding are not production paths.
 Required production values:
 
 - `AUTH_JWT_SECRET` — random value of at least 32 bytes.
-- Composer configuration: `OLLAMA_BASE_URL`/`OLLAMA_MODEL` and optional
-  `OLLAMA_API_KEY`, or a project-owned `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`
-  when `anthropic` is explicitly selected.
+- Composer configuration: a project-owned `OPENAI_API_KEY`/`OPENAI_MODEL`,
+  `OLLAMA_BASE_URL`/`OLLAMA_MODEL` and optional `OLLAMA_API_KEY`, or a
+  project-owned `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`, matching the explicitly
+  selected provider.
 - `TRENDS_FEED_URL` and `TRENDS_FEED_API_KEY`.
 - `APPLE_MAPS_TEAM_ID`, `APPLE_MAPS_KEY_ID`, and `APPLE_MAPS_PRIVATE_KEY`.
 - `APPLE_SIGN_IN_CLIENT_ID` when Sign in with Apple library recovery is enabled.
