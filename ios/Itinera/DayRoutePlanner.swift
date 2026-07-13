@@ -67,7 +67,8 @@ struct DayRouteLeg: Identifiable {
 enum DayRoutePlanner {
     static func route(
         activities: [Activity],
-        mode: TripTransportMode
+        mode: TripTransportMode,
+        arrivalDate: Date? = nil
     ) async throws -> [DayRouteLeg] {
         guard activities.count > 1 else { return [] }
 
@@ -80,6 +81,9 @@ enum DayRoutePlanner {
             request.destination = mapItem(for: destination)
             request.transportType = mode.mapKitType
             request.requestsAlternateRoutes = false
+            if mode == .transit, let arrivalDate {
+                request.arrivalDate = arrivalDate
+            }
 
             let response = try await MKDirections(request: request).calculate()
             guard let route = response.routes.first else {

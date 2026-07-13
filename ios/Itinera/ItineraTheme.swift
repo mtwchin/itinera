@@ -400,6 +400,7 @@ struct ItineraPill: View {
 
 struct ItineraPrimaryButtonStyle: ButtonStyle {
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -411,8 +412,13 @@ struct ItineraPrimaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
                     .fill(theme.accent.opacity(configuration.isPressed ? 0.82 : 1))
             )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(
+                reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1)
+            )
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.12),
+                value: configuration.isPressed
+            )
     }
 }
 
