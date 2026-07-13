@@ -20,11 +20,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         var requestCount = 0
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, _ in
@@ -71,11 +69,9 @@ final class TodayTripViewModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let progressHarness = ControlledTodayProgressLoader()
         var routeRequestCount = 0
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             progressLoader: { try await progressHarness.load() },
@@ -119,11 +115,9 @@ final class TodayTripViewModelTests: XCTestCase {
         var requestedNames: [String] = []
         var requestedMode: TripTransportMode?
 
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, plannedArrival in
@@ -233,11 +227,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         var requestedArrivals: [Date?] = []
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, plannedArrival in
@@ -296,11 +288,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         var requestedArrivals: [Date?] = []
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, plannedArrival in
@@ -349,11 +339,9 @@ final class TodayTripViewModelTests: XCTestCase {
         )
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in throw RouteTestError.unavailable }
@@ -387,11 +375,9 @@ final class TodayTripViewModelTests: XCTestCase {
         )
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, _ in
@@ -430,11 +416,9 @@ final class TodayTripViewModelTests: XCTestCase {
         )
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in throw CancellationError() }
@@ -470,11 +454,9 @@ final class TodayTripViewModelTests: XCTestCase {
         singleStopTrip.result?.itinerary = [singleStopDay]
         singleStopTrip.departureDate = singleStopTrip.arrivalDate
         var routeWasCalled = false
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: singleStopTrip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in
@@ -512,11 +494,9 @@ final class TodayTripViewModelTests: XCTestCase {
         var malformedTrip = trip
         malformedTrip.result?.itinerary[1].activities[1].time = "after lunch"
         var routeWasCalled = false
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: malformedTrip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in
@@ -573,11 +553,9 @@ final class TodayTripViewModelTests: XCTestCase {
         var missingZoneTrip = trip
         missingZoneTrip.result?.timeZoneIdentifier = nil
         var routeWasCalled = false
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: missingZoneTrip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in
@@ -610,11 +588,9 @@ final class TodayTripViewModelTests: XCTestCase {
         var invalidZoneTrip = trip
         invalidZoneTrip.result?.timeZoneIdentifier = "Mars/Olympus"
         var routeWasCalled = false
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: invalidZoneTrip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in
@@ -658,11 +634,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         var routeWasCalled = false
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { _, _, _ in
@@ -698,11 +672,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let harness = ControlledTodayRouteLoader()
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, _ in
@@ -743,11 +715,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let harness = ControlledTodayRouteLoader()
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: calendar,
             now: { now },
             routeLoader: { activities, mode, _ in
@@ -792,9 +762,9 @@ final class TodayTripViewModelTests: XCTestCase {
         let fileURL = root.appending(path: "progress.json")
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: trip,
-            progressStore: TripProgressStore(fileURL: fileURL),
+            progressFileURL: fileURL,
             calendar: calendar,
             now: { now }
         )
@@ -842,11 +812,9 @@ final class TodayTripViewModelTests: XCTestCase {
         destinationTrip.departureDate = "2026-07-14"
         destinationTrip.result = itinerary
 
-        let model = TodayTripViewModel(
+        let model = try makeModel(
             trip: destinationTrip,
-            progressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            ),
+            progressFileURL: root.appending(path: "progress.json"),
             calendar: deviceCalendar,
             now: { now }
         )
@@ -858,6 +826,42 @@ final class TodayTripViewModelTests: XCTestCase {
         XCTAssertEqual(
             model.currentActivity?.name,
             "Miradouro da Senhora do Monte"
+        )
+    }
+
+    private func makeModel(
+        trip: SavedItinerary,
+        progressFileURL: URL,
+        calendar: Calendar = .current,
+        now: @escaping () -> Date = Date.init,
+        progressLoader: (@MainActor () async throws -> [
+            TripStopID: TripStopStatus
+        ])? = nil,
+        routeLoader: @escaping TodayRouteLoader = {
+            activities,
+            mode,
+            plannedArrival in
+            try await DayRoutePlanner.route(
+                activities: activities,
+                mode: mode,
+                arrivalDate: plannedArrival
+            )
+        }
+    ) throws -> TodayTripViewModel {
+        let storage = try PrivateStorageTestContext()
+        return TodayTripViewModel(
+            trip: trip,
+            progressStore: SessionBoundTripProgressStore(
+                store: storage.tripProgressStore(
+                    fileURL: progressFileURL
+                ),
+                lease: storage.lease,
+                identityCoordinator: storage.identityCoordinator
+            ),
+            calendar: calendar,
+            now: now,
+            progressLoader: progressLoader,
+            routeLoader: routeLoader
         )
     }
 

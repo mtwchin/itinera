@@ -51,23 +51,35 @@ final class NativeTripActionsTests: XCTestCase {
     }
 
     func testNotificationContentCarriesDeepLinkMetadata() {
+        let session = presentationSession(scopeCharacter: "a", session: 1)
         let notification = GenerationNotificationContent.tripReady(
             jobID: "job-123",
-            tripTitle: "Lisbon Field Notes"
+            tripTitle: "Lisbon Field Notes",
+            session: session
         )
 
         XCTAssertEqual(notification.title, "Your trip is ready")
         XCTAssertEqual(notification.body, "Lisbon Field Notes is ready to explore.")
         XCTAssertEqual(notification.userInfo["itinera_job_id"], "job-123")
         XCTAssertEqual(notification.userInfo["itinera_destination"], "trip")
+        XCTAssertEqual(notification.userInfo["itinera_principal_scope"], session.scope.digest)
+        XCTAssertEqual(
+            notification.userInfo["itinera_presentation_session"],
+            session.id.uuidString.lowercased()
+        )
     }
 
     func testNotificationContentUsesSafeFallbacksForUntitledAndFailedTrips() {
+        let session = presentationSession(scopeCharacter: "b", session: 2)
         let ready = GenerationNotificationContent.tripReady(
             jobID: "job-untitled",
-            tripTitle: "   "
+            tripTitle: "   ",
+            session: session
         )
-        let failed = GenerationNotificationContent.generationFailed(jobID: "job-failed")
+        let failed = GenerationNotificationContent.generationFailed(
+            jobID: "job-failed",
+            session: session
+        )
 
         XCTAssertEqual(ready.body, "Open Itinera to explore your new route.")
         XCTAssertEqual(failed.title, "Your trip needs attention")
@@ -90,6 +102,170 @@ final class NativeTripActionsTests: XCTestCase {
             GenerationNotificationManager.isItineraNotificationIdentifier(
                 "com.example.unrelated"
             )
+        )
+    }
+
+    @MainActor
+    func testNotificationIdentifiersRoundTripPresentationSession() {
+        let session = presentationSession(scopeCharacter: "c", session: 3)
+        let generation = GenerationNotificationManager.identifier(
+            for: "job.with.periods",
+            session: session
+        )
+        let reminder = GenerationNotificationManager.reminderIdentifier(
+            jobID: "job-123",
+            activityID: "activity-1",
+            session: session
+        )
+
+        XCTAssertEqual(
+            GenerationNotificationManager.presentationSession(from: generation),
+            session
+        )
+        XCTAssertEqual(
+            GenerationNotificationManager.presentationSession(from: reminder),
+            session
+        )
+        XCTAssertNil(
+            GenerationNotificationManager.presentationSession(
+                from: "com.itinera.generation.job-legacy"
+            )
+        )
+    }
+
+    @MainActor
+    func testDelayedA1NotificationTapIsRejectedDuringLaterA3Session() {
+        let firstA = presentationSession(scopeCharacter: "d", session: 4)
+        let laterA = presentationSession(scopeCharacter: "d", session: 5)
+        let content = GenerationNotificationContent.tripReady(
+            jobID: "job-old",
+            tripTitle: nil,
+            session: firstA
+        )
+        let erasedUserInfo = Dictionary<AnyHashable, Any>(
+            uniqueKeysWithValues: content.userInfo.map { (AnyHashable($0.key), $0.value) }
+        )
+        let identifier = GenerationNotificationManager.identifier(
+            for: "job-old",
+            session: firstA
+        )
+
+        XCTAssertTrue(GenerationNotificationMetadata.belongs(erasedUserInfo, to: firstA))
+        XCTAssertFalse(GenerationNotificationMetadata.belongs(erasedUserInfo, to: laterA))
+        XCTAssertEqual(
+            GenerationNotificationManager.presentationSession(
+                from: identifier,
+                userInfo: erasedUserInfo
+            ),
+            firstA
+        )
+
+        let laterContent = GenerationNotificationContent.tripReady(
+            jobID: "job-new",
+            tripTitle: nil,
+            session: laterA
+        )
+        let mismatchedUserInfo = Dictionary<AnyHashable, Any>(
+            uniqueKeysWithValues: laterContent.userInfo.map {
+                (AnyHashable($0.key), $0.value)
+            }
+        )
+        XCTAssertNil(
+            GenerationNotificationManager.presentationSession(
+                from: identifier,
+                userInfo: mismatchedUserInfo
+            )
+        )
+
+        let wrongJobContent = GenerationNotificationContent.tripReady(
+            jobID: "job-different",
+            tripTitle: nil,
+            session: firstA
+        )
+        let wrongJobUserInfo = Dictionary<AnyHashable, Any>(
+            uniqueKeysWithValues: wrongJobContent.userInfo.map {
+                (AnyHashable($0.key), $0.value)
+            }
+        )
+        XCTAssertNil(
+            GenerationNotificationManager.presentationSession(
+                from: identifier,
+                userInfo: wrongJobUserInfo
+            )
+        )
+    }
+
+    @MainActor
+    func testForegroundAndTapGateRequireStrictCurrentIdentifierMetadataPair() {
+        let firstA = presentationSession(scopeCharacter: "f", session: 8)
+        let laterA = presentationSession(scopeCharacter: "f", session: 9)
+        let manager = GenerationNotificationManager()
+        manager.establishActiveSession(laterA)
+
+        func isAccepted(
+            identifier: String,
+            content: GenerationNotificationContent
+        ) -> Bool {
+            let userInfo = Dictionary<AnyHashable, Any>(
+                uniqueKeysWithValues: content.userInfo.map {
+                    (AnyHashable($0.key), $0.value)
+                }
+            )
+            guard let parsed = GenerationNotificationManager
+                .presentationSession(
+                    from: identifier,
+                    userInfo: userInfo
+                ) else {
+                return false
+            }
+            return manager.isCurrent(parsed)
+        }
+
+        let staleContent = GenerationNotificationContent.tripReady(
+            jobID: "job-a1",
+            tripTitle: nil,
+            session: firstA
+        )
+        XCTAssertFalse(
+            isAccepted(
+                identifier: GenerationNotificationManager.identifier(
+                    for: "job-a1",
+                    session: firstA
+                ),
+                content: staleContent
+            )
+        )
+
+        let currentContent = GenerationNotificationContent.tripReady(
+            jobID: "job-a3",
+            tripTitle: nil,
+            session: laterA
+        )
+        XCTAssertTrue(
+            isAccepted(
+                identifier: GenerationNotificationManager.identifier(
+                    for: "job-a3",
+                    session: laterA
+                ),
+                content: currentContent
+            )
+        )
+        XCTAssertFalse(
+            isAccepted(
+                identifier: "com.itinera.generation.job-a3",
+                content: currentContent
+            ),
+            "Legacy unscoped notifications must be silent and non-navigable."
+        )
+        XCTAssertFalse(
+            isAccepted(
+                identifier: GenerationNotificationManager.identifier(
+                    for: "different-job",
+                    session: laterA
+                ),
+                content: currentContent
+            ),
+            "Identifier and userInfo must agree on both session and job."
         )
     }
 
@@ -145,6 +321,35 @@ final class NativeTripActionsTests: XCTestCase {
         XCTAssertEqual(state.progress, 1)
     }
 
+    @MainActor
+    func testLiveActivityStartRejectsEarlierSessionForSamePrincipal() {
+        let manager = TripLiveActivityManager()
+        let firstA = presentationSession(scopeCharacter: "e", session: 6)
+        let laterA = presentationSession(scopeCharacter: "e", session: 7)
+        manager.establishActiveSession(firstA)
+        manager.establishActiveSession(laterA)
+        let state = TripActivityAttributes.ContentState(
+            dayNumber: 1,
+            stopNumber: 1,
+            totalStops: 2,
+            currentStop: nil,
+            nextStop: "Belém Tower",
+            leaveBy: nil,
+            progress: 0
+        )
+
+        XCTAssertThrowsError(
+            try manager.start(
+                presentationSession: firstA,
+                tripID: "trip-old",
+                tripTitle: "Old A trip",
+                state: state
+            )
+        ) { error in
+            XCTAssertEqual(error as? PrivateSurfaceScopeError, .staleScope)
+        }
+    }
+
     private var itinerary: Itinerary {
         Itinerary(
             itinerary: [
@@ -179,5 +384,18 @@ final class NativeTripActionsTests: XCTestCase {
             address: "Lisbon, Portugal",
             coordinates: Coordinates(lat: 38.7, lng: -9.1)
         )
+    }
+
+    private func presentationSession(
+        scopeCharacter: Character,
+        session: Int
+    ) -> PrivatePresentationSession {
+        let scope = try! PrincipalScope(
+            validating: String(repeating: scopeCharacter, count: PrincipalScope.digestLength)
+        )
+        let id = UUID(
+            uuidString: String(format: "00000000-0000-0000-0000-%012d", session)
+        )!
+        return PrivatePresentationSession(scope: scope, id: id)
     }
 }

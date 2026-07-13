@@ -4,6 +4,7 @@ struct PlaceReportSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     let jobID: String
     let activity: Activity
@@ -58,22 +59,28 @@ struct PlaceReportSheet: View {
     }
 
     private func submit() async {
+        guard let privateAppSession else { return }
         isSubmitting = true
         defer { isSubmitting = false }
         do {
-            _ = try await appState.apiClient.createPlaceReport(
-                jobID,
-                input: PlaceReportCreate(
-                    activityName: activity.name,
-                    category: category,
-                    details: details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? nil
-                        : details
-                )
+            let input = PlaceReportCreate(
+                activityName: activity.name,
+                category: category,
+                details: details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : details
             )
-            onSubmitted()
-            dismiss()
+            let scopedReport = try await appState.scopedAPIValue(
+                session: privateAppSession
+            ) { client in
+                try await client.createPlaceReport(jobID, input: input)
+            }
+            _ = await appState.consume(scopedReport) { _ in
+                onSubmitted()
+                dismiss()
+            }
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }

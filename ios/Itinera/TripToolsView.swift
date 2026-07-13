@@ -13,6 +13,7 @@ struct TripToolsView: View {
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     let jobID: String
     let tripTitle: String
@@ -368,116 +369,222 @@ struct TripToolsView: View {
     }
 
     private func load() async {
+        guard let session = privateAppSession else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            async let loadedReservations = appState.apiClient.reservations(jobID)
-            async let loadedChecklist = appState.apiClient.checklist(jobID)
-            async let loadedExpenses = appState.apiClient.expenses(jobID)
-            async let loadedCollaborators = appState.apiClient.collaborators(jobID)
-            (reservations, checklist, expenses, collaborators) = try await (
-                loadedReservations,
-                loadedChecklist,
-                loadedExpenses,
-                loadedCollaborators
-            )
-            errorMessage = nil
+            try await scopedRequest(session: session, { client in
+                async let loadedReservations = client.reservations(jobID)
+                async let loadedChecklist = client.checklist(jobID)
+                async let loadedExpenses = client.expenses(jobID)
+                async let loadedCollaborators = client.collaborators(jobID)
+                return try await TripToolsSnapshot(
+                    reservations: loadedReservations,
+                    checklist: loadedChecklist,
+                    expenses: loadedExpenses,
+                    collaborators: loadedCollaborators
+                )
+            }) { snapshot in
+                reservations = snapshot.reservations
+                checklist = snapshot.checklist
+                expenses = snapshot.expenses
+                collaborators = snapshot.collaborators
+                errorMessage = nil
+            }
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(session) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func createReservation() async {
+        guard let session = privateAppSession else { return }
         do {
-            let created = try await appState.apiClient.createReservation(
-                jobID,
-                input: reservationDraft.input
-            )
-            reservations.append(created)
-            reservationDraft = ReservationDraft()
-            isShowingReservationForm = false
-        } catch { errorMessage = error.localizedDescription }
+            let input = reservationDraft.input
+            try await scopedRequest(session: session, { client in
+                try await client.createReservation(jobID, input: input)
+            }) { created in
+                reservations.append(created)
+                reservationDraft = ReservationDraft()
+                isShowingReservationForm = false
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func deleteReservation(_ reservation: TripReservation) async {
+        guard let session = privateAppSession else { return }
         do {
-            try await appState.apiClient.deleteReservation(jobID, reservationID: reservation.id)
-            reservations.removeAll { $0.id == reservation.id }
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.deleteReservation(
+                    jobID,
+                    reservationID: reservation.id
+                )
+            }) { _ in
+                reservations.removeAll { $0.id == reservation.id }
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func addChecklistItem() async {
+        guard let session = privateAppSession else { return }
         let title = checklistTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         do {
-            let created = try await appState.apiClient.createChecklistItem(
-                jobID,
-                input: TripChecklistItemCreate(title: title, position: checklist.count)
+            let input = TripChecklistItemCreate(
+                title: title,
+                position: checklist.count
             )
-            checklist.append(created)
-            checklistTitle = ""
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.createChecklistItem(jobID, input: input)
+            }) { created in
+                checklist.append(created)
+                checklistTitle = ""
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func toggleChecklistItem(_ item: TripChecklistItem) async {
+        guard let session = privateAppSession else { return }
         do {
-            let updated = try await appState.apiClient.updateChecklistItem(
-                jobID,
-                itemID: item.id,
-                input: TripChecklistItemUpdate(isCompleted: !item.isCompleted)
+            let input = TripChecklistItemUpdate(
+                isCompleted: !item.isCompleted
             )
-            if let index = checklist.firstIndex(where: { $0.id == item.id }) {
-                checklist[index] = updated
+            try await scopedRequest(session: session, { client in
+                try await client.updateChecklistItem(
+                    jobID,
+                    itemID: item.id,
+                    input: input
+                )
+            }) { updated in
+                if let index = checklist.firstIndex(where: { $0.id == item.id }) {
+                    checklist[index] = updated
+                }
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func deleteChecklistItem(_ item: TripChecklistItem) async {
+        guard let session = privateAppSession else { return }
         do {
-            try await appState.apiClient.deleteChecklistItem(jobID, itemID: item.id)
-            checklist.removeAll { $0.id == item.id }
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.deleteChecklistItem(jobID, itemID: item.id)
+            }) { _ in
+                checklist.removeAll { $0.id == item.id }
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func createExpense(_ input: TripExpenseCreate) async {
+        guard let session = privateAppSession else { return }
         do {
-            expenses.append(try await appState.apiClient.createExpense(jobID, input: input))
-            isShowingExpenseForm = false
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.createExpense(jobID, input: input)
+            }) { created in
+                expenses.append(created)
+                isShowingExpenseForm = false
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func deleteExpense(_ expense: TripExpense) async {
+        guard let session = privateAppSession else { return }
         do {
-            try await appState.apiClient.deleteExpense(jobID, expenseID: expense.id)
-            expenses.removeAll { $0.id == expense.id }
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.deleteExpense(jobID, expenseID: expense.id)
+            }) { _ in
+                expenses.removeAll { $0.id == expense.id }
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func createInvite(email: String?, role: String) async {
+        guard let session = privateAppSession else { return }
         do {
-            latestInvite = try await appState.apiClient.createCollaborationInvite(
-                jobID,
-                input: CollaborationInviteCreate(email: email, role: role, expiresInHours: 72)
+            let input = CollaborationInviteCreate(
+                email: email,
+                role: role,
+                expiresInHours: 72
             )
-            isShowingInviteForm = false
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.createCollaborationInvite(jobID, input: input)
+            }) { invite in
+                latestInvite = invite
+                isShowingInviteForm = false
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func removeCollaborator(_ collaborator: TripCollaborator) async {
+        guard let session = privateAppSession else { return }
         do {
-            try await appState.apiClient.removeCollaborator(jobID, collaboratorID: collaborator.id)
-            collaborators.removeAll { $0.id == collaborator.id }
-        } catch { errorMessage = error.localizedDescription }
+            try await scopedRequest(session: session, { client in
+                try await client.removeCollaborator(
+                    jobID,
+                    collaboratorID: collaborator.id
+                )
+            }) { _ in
+                collaborators.removeAll { $0.id == collaborator.id }
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func acceptInvite() async {
+        guard let session = privateAppSession else { return }
         do {
-            _ = try await appState.apiClient.acceptCollaborationInvite(token: inviteToken)
-            inviteToken = ""
-            appState.markLibraryChanged()
-        } catch { errorMessage = error.localizedDescription }
+            let token = inviteToken
+            try await scopedRequest(session: session, { client in
+                try await client.acceptCollaborationInvite(token: token)
+            }) { _ in
+                inviteToken = ""
+                appState.markLibraryChanged(session: session)
+            }
+        } catch {
+            guard await appState.isCurrent(session) else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func scopedRequest<Value: Sendable>(
+        session: PrivateAppSession,
+        _ operation: @escaping @Sendable (IdentityBoundAPIClient) async throws -> Value,
+        apply: (Value) -> Void
+    ) async throws {
+        let scopedValue = try await appState.scopedAPIValue(
+            session: session,
+            operation
+        )
+        guard await appState.consume(scopedValue, perform: apply) else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
     }
 
     private func handleReservationImport(_ result: Result<[URL], Error>) {
@@ -492,6 +599,13 @@ struct TripToolsView: View {
             errorMessage = "That reservation file couldn't be opened."
         }
     }
+}
+
+private struct TripToolsSnapshot: Sendable {
+    let reservations: [TripReservation]
+    let checklist: [TripChecklistItem]
+    let expenses: [TripExpense]
+    let collaborators: [TripCollaborator]
 }
 
 private struct ReservationDraft {

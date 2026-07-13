@@ -17,22 +17,19 @@ struct ItineraNextStopWidget: Widget {
             provider: ItineraNextStopProvider()
         ) { entry in
             ItineraNextStopWidgetView(entry: entry)
+                .privacySensitive()
                 .containerBackground(for: .widget) {
                     Color(red: 0.96, green: 0.94, blue: 0.90)
                 }
-                .widgetURL(entry.snapshot.flatMap { tripURL($0.tripID) })
+                .widgetURL(entry.snapshot.flatMap {
+                    ScopedTripURL.make(
+                        presentationSession: $0.presentationSession
+                    )
+                })
         }
         .configurationDisplayName("Next stop")
         .description("See the next stop and leave-by time for today's trip.")
         .supportedFamilies([.systemSmall, .systemMedium])
-    }
-
-    private func tripURL(_ tripID: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = "itinera"
-        components.host = "trip"
-        components.path = "/\(tripID)"
-        return components.url
     }
 }
 
@@ -144,6 +141,12 @@ private struct ItineraNextStopWidgetView: View {
 
 private extension TripWidgetSnapshot {
     static let placeholder = TripWidgetSnapshot(
+        presentationSession: PrivatePresentationSession(
+            scope: try! PrincipalScope(
+                validating: String(repeating: "0", count: PrincipalScope.digestLength)
+            ),
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        ),
         tripID: "preview",
         tripTitle: "Lisbon field guide",
         dayNumber: 1,
@@ -162,7 +165,12 @@ struct TripLiveActivityWidget: Widget {
             lockScreenView(context)
                 .activityBackgroundTint(Color(red: 0.96, green: 0.94, blue: 0.90))
                 .activitySystemActionForegroundColor(Color(red: 0.16, green: 0.28, blue: 0.22))
-                .widgetURL(tripURL(context.attributes.tripID))
+                .privacySensitive()
+                .widgetURL(
+                    ScopedTripURL.make(
+                        presentationSession: context.attributes.presentationSession
+                    )
+                )
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -172,20 +180,24 @@ struct TripLiveActivityWidget: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     Text("\(context.state.stopNumber)/\(context.state.totalStops)")
                         .font(.caption.monospacedDigit().weight(.bold))
+                        .privacySensitive()
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.attributes.tripTitle)
                         .font(.headline)
                         .lineLimit(1)
+                        .privacySensitive()
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 5) {
                         Text("Next: \(context.state.nextStop)")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
+                            .privacySensitive()
                         ProgressView(value: context.state.progress)
                             .tint(Color(red: 0.25, green: 0.40, blue: 0.32))
                     }
+                    .privacySensitive()
                 }
             } compactLeading: {
                 Image(systemName: "location.north.fill")
@@ -195,15 +207,21 @@ struct TripLiveActivityWidget: Widget {
                     Text(timerInterval: Date()...max(Date(), leaveBy), countsDown: true)
                         .monospacedDigit()
                         .frame(width: 42)
+                        .privacySensitive()
                 } else {
                     Text("\(context.state.stopNumber)/\(context.state.totalStops)")
                         .monospacedDigit()
+                        .privacySensitive()
                 }
             } minimal: {
                 Image(systemName: "location.north.fill")
                     .foregroundStyle(Color(red: 0.65, green: 0.26, blue: 0.18))
             }
-            .widgetURL(tripURL(context.attributes.tripID))
+            .widgetURL(
+                ScopedTripURL.make(
+                    presentationSession: context.attributes.presentationSession
+                )
+            )
             .keylineTint(Color(red: 0.25, green: 0.40, blue: 0.32))
         }
     }
@@ -237,14 +255,7 @@ struct TripLiveActivityWidget: Widget {
             }
         }
         .padding()
+        .privacySensitive()
         .accessibilityElement(children: .combine)
-    }
-
-    private func tripURL(_ tripID: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = "itinera"
-        components.host = "trip"
-        components.path = "/\(tripID)"
-        return components.url
     }
 }

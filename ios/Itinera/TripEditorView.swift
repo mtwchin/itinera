@@ -4,6 +4,7 @@ struct TripEditorView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     let jobID: String
     let tripTitle: String
@@ -44,10 +45,7 @@ struct TripEditorView: View {
                 ?? itinerary.itinerary.first?.day
                 ?? 1
         )
-        let stored = UserDefaults.standard.stringArray(
-            forKey: Self.lockKey(jobID)
-        ) ?? []
-        _lockedActivityIDs = State(initialValue: Set(stored))
+        _lockedActivityIDs = State(initialValue: [])
     }
 
     private var dayIndex: Int? {
@@ -111,7 +109,16 @@ struct TripEditorView: View {
                 .disabled(undoStack.isEmpty || isWorking)
             }
         }
-        .task { await loadHistory() }
+        .task {
+            guard let privateAppSession else { return }
+            let loadedLockedActivityIDs = await appState.lockedActivityIDs(
+                for: jobID,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
+            lockedActivityIDs = loadedLockedActivityIDs
+            await loadHistory()
+        }
         .sheet(item: $editorTarget) { target in
             NavigationStack {
                 ActivityEditorForm(target: target) { activity in
@@ -227,7 +234,7 @@ struct TripEditorView: View {
                         Spacer(minLength: 0)
 
                         Button {
-                            toggleLock(activity)
+                            Task { await toggleLock(activity) }
                         } label: {
                             Image(systemName: lockedActivityIDs.contains(activity.id) ? "lock.fill" : "lock.open")
                                 .frame(width: 44, height: 44)
@@ -307,15 +314,17 @@ struct TripEditorView: View {
         _ operations: [TripRevisionOperation],
         previousDay: ItineraryDay
     ) async {
-        guard !operations.isEmpty else { return }
+        guard !operations.isEmpty, let privateAppSession else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             let response = try await appState.reviseTrip(
                 jobID: jobID,
                 expectedVersion: version,
-                operations: operations
+                operations: operations,
+                session: privateAppSession
             )
+            guard await appState.isCurrent(privateAppSession) else { return }
             undoStack.append((previousDay.day, previousDay))
             itinerary = response.result
             version = response.toVersion
@@ -323,6 +332,7 @@ struct TripEditorView: View {
             errorMessage = nil
             onApply(response.result, response.toVersion)
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -358,13 +368,18 @@ struct TripEditorView: View {
     }
 
     private func checkWeather(_ day: ItineraryDay) async {
-        guard let first = day.activities.first else { return }
+        guard let first = day.activities.first,
+              let privateAppSession,
+              await appState.isCurrent(privateAppSession) else { return }
         isCheckingWeather = true
         defer { isCheckingWeather = false }
         do {
-            weatherAdvisory = try await TripWeatherService.advisory(for: first)
+            let advisory = try await TripWeatherService.advisory(for: first)
+            guard await appState.isCurrent(privateAppSession) else { return }
+            weatherAdvisory = advisory
             errorMessage = nil
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = "Live weather isn't available right now. Your itinerary was not changed."
         }
     }
@@ -406,10 +421,13 @@ struct TripEditorView: View {
                 previousDay: day
             )
         }
+        guard let privateAppSession,
+              await appState.isCurrent(privateAppSession) else { return }
         editorTarget = nil
     }
 
     private func undo() async {
+        guard let privateAppSession else { return }
         guard let previous = undoStack.popLast() else { return }
         guard let current = itinerary.itinerary.first(where: { $0.day == previous.day }) else { return }
         isWorking = true
@@ -424,8 +442,10 @@ struct TripEditorView: View {
                         theme: previous.snapshot.theme,
                         activities: previous.snapshot.activities
                     )
-                ]
+                ],
+                session: privateAppSession
             )
+            guard await appState.isCurrent(privateAppSession) else { return }
             itinerary = response.result
             version = response.toVersion
             history.append(response)
@@ -433,32 +453,39 @@ struct TripEditorView: View {
             onApply(response.result, response.toVersion)
             if current == previous.snapshot { undoStack.removeAll() }
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
-    private func toggleLock(_ activity: Activity) {
+    private func toggleLock(_ activity: Activity) async {
+        guard let privateAppSession,
+              await appState.isCurrent(privateAppSession) else { return }
         if lockedActivityIDs.contains(activity.id) {
             lockedActivityIDs.remove(activity.id)
         } else {
             lockedActivityIDs.insert(activity.id)
         }
-        UserDefaults.standard.set(
-            Array(lockedActivityIDs),
-            forKey: Self.lockKey(jobID)
+        let identifiers = lockedActivityIDs
+        await appState.saveLockedActivityIDs(
+            identifiers,
+            for: jobID,
+            session: privateAppSession
         )
     }
 
     private func loadHistory() async {
+        guard let privateAppSession else { return }
         do {
-            history = try await appState.apiClient.revisionHistory(jobID)
+            let scopedHistory = try await appState.scopedAPIValue(
+                session: privateAppSession
+            ) { client in
+                try await client.revisionHistory(jobID)
+            }
+            _ = await appState.consume(scopedHistory) { history = $0 }
         } catch {
             // Editing remains available even if the optional history cannot load.
         }
-    }
-
-    private static func lockKey(_ jobID: String) -> String {
-        ItineraLocalDataKeys.lockedStopsPrefix + jobID
     }
 }
 

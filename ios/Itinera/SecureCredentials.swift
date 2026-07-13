@@ -6,6 +6,49 @@ struct AuthCredentials: Codable, Equatable, Sendable {
     let refreshToken: String
     let tokenType: String
     let expiresAt: Date
+    /// `nil` is accepted only when decoding a credential written before D2.
+    /// New server sessions always persist the canonical server-issued UUID.
+    let userID: String?
+
+    init(
+        accessToken: String,
+        refreshToken: String,
+        tokenType: String,
+        expiresAt: Date,
+        userID: String? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.tokenType = tokenType
+        self.expiresAt = expiresAt
+        self.userID = userID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accessToken
+        case refreshToken
+        case tokenType
+        case expiresAt
+        case userID
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try container.decode(String.self, forKey: .accessToken)
+        refreshToken = try container.decode(String.self, forKey: .refreshToken)
+        tokenType = try container.decode(String.self, forKey: .tokenType)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        userID = try container.decodeIfPresent(String.self, forKey: .userID)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(accessToken, forKey: .accessToken)
+        try container.encode(refreshToken, forKey: .refreshToken)
+        try container.encode(tokenType, forKey: .tokenType)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encodeIfPresent(userID, forKey: .userID)
+    }
 
     func isExpired(at date: Date, leeway: TimeInterval = 30) -> Bool {
         expiresAt <= date.addingTimeInterval(leeway)
@@ -59,6 +102,11 @@ actor KeychainCredentialStore: CredentialStoring {
     }
 
     func saveCredentials(_ credentials: AuthCredentials) throws {
+        guard let userID = credentials.userID,
+              let uuid = UUID(uuidString: userID),
+              userID == uuid.uuidString.lowercased() else {
+            throw KeychainError.invalidData
+        }
         try write(try encoder.encode(credentials), account: Account.credentials)
     }
 

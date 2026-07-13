@@ -7,6 +7,7 @@ struct TodayRootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     var onPlanTrip: () -> Void = {}
     var onOpenTrips: () -> Void = {}
@@ -14,6 +15,14 @@ struct TodayRootView: View {
     @State private var trips: [SavedItinerary] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
+    @State private var isShowingOfflineCopy = false
+    @State private var isRetryingEmptyLibrary = false
+    @AccessibilityFocusState private var retryErrorIsFocused: Bool
+
+    private var serverSessionNeedsRecovery: Bool {
+        if case .recoveryRequired = appState.identityPhase { return true }
+        return false
+    }
 
     private var activeTrip: SavedItinerary? {
         trips.first {
@@ -33,10 +42,15 @@ struct TodayRootView: View {
         NavigationStack {
             Group {
                 if let activeTrip {
-                    TodayTripView(
-                        trip: activeTrip,
-                        progressStore: appState.tripProgressStore
-                    )
+                    if let privateAppSession,
+                       let progressStore = appState.tripProgressStore(
+                           session: privateAppSession
+                       ) {
+                        TodayTripView(
+                            trip: activeTrip,
+                            progressStore: progressStore
+                        )
+                    }
                 } else {
                     unavailableState
                 }
@@ -61,46 +75,58 @@ struct TodayRootView: View {
                             message: errorMessage,
                             kind: .warning
                         )
+                        .accessibilityFocused($retryErrorIsFocused)
                     }
 
-                    ItineraSurface {
-                        VStack(spacing: 17) {
-                            Image(systemName: "location.fill.viewfinder")
-                                .font(.system(size: 38))
-                                .foregroundStyle(theme.route)
-                                .frame(width: 80, height: 80)
-                                .background(theme.route.opacity(0.1), in: Circle())
+                    if isShowingOfflineCopy && trips.isEmpty {
+                        PrivateLibraryEmptyCard(
+                            state: .noOfflineTrips,
+                            actionTitle: serverSessionNeedsRecovery
+                                ? "Retry Session"
+                                : nil,
+                            isWorking: isRetryingEmptyLibrary,
+                            action: { Task { await retryEmptyLibrary() } }
+                        )
+                    } else {
+                        ItineraSurface {
+                            VStack(spacing: 17) {
+                                Image(systemName: "location.fill.viewfinder")
+                                    .font(.system(size: 38))
+                                    .foregroundStyle(theme.route)
+                                    .frame(width: 80, height: 80)
+                                    .background(theme.route.opacity(0.1), in: Circle())
 
-                            VStack(spacing: 6) {
-                                Text(nextTrip == nil ? "No active trip" : "Your next trip is ready")
-                                    .font(.system(.title2, design: .serif, weight: .bold))
-                                    .foregroundStyle(theme.primaryText)
-                                if let nextTrip {
-                                    Text(nextTrip.displayTitle)
-                                        .font(.headline)
+                                VStack(spacing: 6) {
+                                    Text(nextTrip == nil ? "No active trip" : "Your next trip is ready")
+                                        .font(.system(.title2, design: .serif, weight: .bold))
                                         .foregroundStyle(theme.primaryText)
-                                    if let arrivalDate = nextTrip.arrivalDate {
-                                        Text("Starts \(arrivalDate)")
-                                            .font(.subheadline.monospacedDigit())
+                                    if let nextTrip {
+                                        Text(nextTrip.displayTitle)
+                                            .font(.headline)
+                                            .foregroundStyle(theme.primaryText)
+                                        if let arrivalDate = nextTrip.arrivalDate {
+                                            Text("Starts \(arrivalDate)")
+                                                .font(.subheadline.monospacedDigit())
+                                                .foregroundStyle(theme.secondaryText)
+                                        }
+                                    } else {
+                                        Text("Plan a dated trip or open your library to choose a route.")
+                                            .font(.subheadline)
                                             .foregroundStyle(theme.secondaryText)
+                                            .multilineTextAlignment(.center)
                                     }
-                                } else {
-                                    Text("Plan a dated trip or open your library to choose a route.")
-                                        .font(.subheadline)
-                                        .foregroundStyle(theme.secondaryText)
-                                        .multilineTextAlignment(.center)
                                 }
-                            }
 
-                            Button(action: nextTrip == nil ? onPlanTrip : onOpenTrips) {
-                                Label(
-                                    nextTrip == nil ? "Plan a trip" : "Open trip library",
-                                    systemImage: nextTrip == nil ? "plus" : "suitcase.fill"
-                                )
+                                Button(action: nextTrip == nil ? onPlanTrip : onOpenTrips) {
+                                    Label(
+                                        nextTrip == nil ? "Plan a trip" : "Open trip library",
+                                        systemImage: nextTrip == nil ? "plus" : "suitcase.fill"
+                                    )
+                                }
+                                .buttonStyle(ItineraPrimaryButtonStyle())
                             }
-                            .buttonStyle(ItineraPrimaryButtonStyle())
+                            .frame(maxWidth: .infinity)
                         }
-                        .frame(maxWidth: .infinity)
                     }
                 }
                 .padding(18)
@@ -122,31 +148,106 @@ struct TodayRootView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
-        await appState.loadCachedTrips()
+        guard let privateAppSession else { return }
+        let presentationSession = privateAppSession.presentationSession
+        await appState.loadCachedTrips(session: privateAppSession)
+        guard await appState.isCurrent(privateAppSession) else { return }
         trips = appState.cachedTrips
+        isShowingOfflineCopy = !trips.isEmpty
         do {
-            let remoteTrips = try await appState.refreshTripLibrary()
+            let remoteTrips = try await appState.refreshTripLibrary(
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else {
+                return
+            }
             trips = remoteTrips
             if settingsPreferences.tripRemindersEnabled {
                 try? await GenerationNotificationManager.shared
-                    .scheduleTripReminders(for: remoteTrips)
+                    .scheduleTripReminders(
+                        for: remoteTrips,
+                        expectedSession: presentationSession
+                    )
             }
-            await appState.reconcilePending(with: remoteTrips)
+            await appState.reconcilePending(
+                with: remoteTrips,
+                session: privateAppSession
+            )
             errorMessage = nil
+            isShowingOfflineCopy = false
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             if trips.isEmpty {
-                errorMessage = error.localizedDescription
+                errorMessage = nil
             } else {
                 errorMessage = "Today is using the offline copy saved on this iPhone."
             }
+            isShowingOfflineCopy = true
         }
+        guard await appState.isCurrent(privateAppSession) else { return }
         if activeTrip == nil {
-            TripWidgetSnapshotStore.clear()
-            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            if TripWidgetSnapshotStore.clearSnapshot(
+                expectedSession: presentationSession
+            ) {
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: ItineraWidgetKind.nextStop
+                )
+            }
         }
     }
+
+    private func retryEmptyLibrary() async {
+        guard !isRetryingEmptyLibrary else { return }
+        guard let privateAppSession else { return }
+        isRetryingEmptyLibrary = true
+        defer { isRetryingEmptyLibrary = false }
+        retryErrorIsFocused = false
+        if serverSessionNeedsRecovery {
+            do {
+                try await appState.retryServerSession(
+                    session: privateAppSession
+                )
+            } catch {
+                guard await appState.isCurrent(privateAppSession) else { return }
+                errorMessage = error.localizedDescription
+                retryErrorIsFocused = true
+                return
+            }
+        }
+        await load()
+    }
+}
+
+#Preview(
+    "Today · Offline empty · Compact accessibility",
+    traits: .fixedLayout(width: 320, height: 760)
+) {
+    NavigationStack {
+        ZStack {
+            ItineraBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ItineraBrandHeader(
+                        eyebrow: "On the road",
+                        title: "Your day will meet you here.",
+                        message: "Today can use only trips saved for this private library on this iPhone while offline."
+                    )
+                    PrivateLibraryEmptyCard(
+                        state: .noOfflineTrips,
+                        action: {}
+                    )
+                }
+                .padding(18)
+            }
+        }
+        .navigationTitle("Today")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    .environment(\.itineraTheme, .atlas)
+    .environment(\.dynamicTypeSize, .accessibility2)
+    .preferredColorScheme(.light)
 }
 
 @MainActor
@@ -159,7 +260,7 @@ final class TodayTripViewModel: ObservableObject {
     @Published private(set) var transportMode: TripTransportMode = .walking
     @Published private(set) var hasLoadedProgress = false
 
-    private let progressStore: TripProgressStore
+    private let progressStore: SessionBoundTripProgressStore
     private let progressLoader: @MainActor () async throws -> [
         TripStopID: TripStopStatus
     ]
@@ -185,7 +286,7 @@ final class TodayTripViewModel: ObservableObject {
 
     init(
         trip: SavedItinerary,
-        progressStore: TripProgressStore,
+        progressStore: SessionBoundTripProgressStore,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init,
         progressLoader: (@MainActor () async throws -> [
@@ -207,7 +308,11 @@ final class TodayTripViewModel: ObservableObject {
         self.calendar = calendar
         self.now = now
         self.progressLoader = progressLoader ?? {
-            try await progressStore.progress(for: trip.jobId)
+            let progress = try await progressStore.progress(for: trip.jobId)
+            guard await progressStore.canPublish(progress) else {
+                throw IdentityCoordinatorError.staleIdentity
+            }
+            return progress.value
         }
         self.routeLoader = routeLoader
         setPlannedTimingState()
@@ -433,6 +538,9 @@ final class TodayTripViewModel: ObservableObject {
         timingState = .checking(context)
 
         do {
+            guard await progressStore.isCurrent() else {
+                throw IdentityCoordinatorError.staleIdentity
+            }
             let plannedArrival = transportMode == .transit
                 && plannedStart > now()
                 ? plannedStart
@@ -443,6 +551,9 @@ final class TodayTripViewModel: ObservableObject {
                 plannedArrival
             )
             try Task.checkCancellation()
+            guard await progressStore.isCurrent() else {
+                throw IdentityCoordinatorError.staleIdentity
+            }
             guard activeTimingRequestID == requestID else { return }
             guard
                 let leg = legs.first,
@@ -479,7 +590,10 @@ final class TodayTripViewModel: ObservableObject {
             activeTimingRequestID = nil
             setPlannedTimingState()
             return
+        } catch is IdentityCoordinatorError {
+            return
         } catch {
+            guard await progressStore.isCurrent() else { return }
             guard activeTimingRequestID == requestID else { return }
             activeTimingRequestID = nil
             timingState = .unavailable(context)
@@ -526,7 +640,9 @@ final class TodayTripViewModel: ObservableObject {
     func load() async {
         do {
             let previousRequestID = routeRequestID
-            statuses = try await progressLoader()
+            let loadedStatuses = try await progressLoader()
+            guard await progressStore.isCurrent() else { return }
+            statuses = loadedStatuses
             if routeRequestID != previousRequestID {
                 activeTimingRequestID = nil
                 setPlannedTimingState()
@@ -535,7 +651,10 @@ final class TodayTripViewModel: ObservableObject {
             hasLoadedProgress = true
         } catch is CancellationError {
             return
+        } catch is IdentityCoordinatorError {
+            return
         } catch {
+            guard await progressStore.isCurrent() else { return }
             errorMessage = "Trip progress could not be loaded on this iPhone."
             hasLoadedProgress = true
         }
@@ -551,6 +670,13 @@ final class TodayTripViewModel: ObservableObject {
         do {
             let previousRequestID = routeRequestID
             try await progressStore.set(status, for: stopID)
+            let scopedStatus = IdentityScopedValue(
+                value: status,
+                lease: progressStore.lease
+            )
+            guard await progressStore.canPublish(scopedStatus) else {
+                throw IdentityCoordinatorError.staleIdentity
+            }
             statuses[stopID] = status
             if routeRequestID != previousRequestID {
                 activeTimingRequestID = nil
@@ -559,7 +685,10 @@ final class TodayTripViewModel: ObservableObject {
             errorMessage = nil
         } catch is CancellationError {
             return
+        } catch is IdentityCoordinatorError {
+            return
         } catch {
+            guard await progressStore.isCurrent() else { return }
             errorMessage = "That update could not be saved on this iPhone."
         }
     }
@@ -667,15 +796,18 @@ final class TodayTripViewModel: ObservableObject {
 
 struct TodayTripView: View {
     @Environment(\.itineraTheme) private var theme
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.privateAppSession) private var privateAppSession
     @StateObject private var model: TodayTripViewModel
     @State private var liveActivityID: String?
     @State private var liveActivityError: String?
     @State private var isShowingAdjustment = false
+    @State private var presentationSession: PrivatePresentationSession?
     private let fixedTimingDate: Date?
 
     init(
         trip: SavedItinerary,
-        progressStore: TripProgressStore,
+        progressStore: SessionBoundTripProgressStore,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init,
         fixedTimingDate: Date? = nil,
@@ -823,7 +955,13 @@ struct TodayTripView: View {
             }
         }
         .task {
+            guard let privateAppSession else { return }
+            let session = privateAppSession.presentationSession
+            presentationSession = session
             await model.load()
+            guard await appState.isCurrent(privateAppSession) else {
+                return
+            }
             updateWidgetSnapshot()
         }
         .task(id: timingTaskID) {
@@ -1026,11 +1164,16 @@ struct TodayTripView: View {
 
     @MainActor
     private func toggleLiveActivity() async {
+        guard let presentationSession,
+              let privateAppSession,
+              await appState.isCurrent(privateAppSession) else { return }
         if let liveActivityID, let state = model.liveActivityState {
             await TripLiveActivityManager.shared.end(
                 activityID: liveActivityID,
+                expectedSession: presentationSession,
                 finalState: state
             )
+            guard await appState.isCurrent(privateAppSession) else { return }
             self.liveActivityID = nil
             liveActivityError = nil
             return
@@ -1039,6 +1182,7 @@ struct TodayTripView: View {
         guard let state = model.liveActivityState else { return }
         do {
             liveActivityID = try TripLiveActivityManager.shared.start(
+                presentationSession: presentationSession,
                 tripID: model.trip.jobId,
                 tripTitle: model.trip.displayTitle,
                 state: state
@@ -1055,26 +1199,50 @@ struct TodayTripView: View {
 
     @MainActor
     private func updateLiveActivity() async {
-        guard let liveActivityID else { return }
+        guard let liveActivityID,
+              let presentationSession,
+              let privateAppSession,
+              await appState.isCurrent(privateAppSession) else { return }
         guard let state = model.liveActivityState else {
-            await TripLiveActivityManager.shared.endAll()
+            await TripLiveActivityManager.shared.end(
+                activityID: liveActivityID,
+                expectedSession: presentationSession,
+                finalState: .init(
+                    dayNumber: 1,
+                    stopNumber: 0,
+                    totalStops: 0,
+                    currentStop: nil,
+                    nextStop: "Trip complete",
+                    leaveBy: nil,
+                    progress: 1
+                )
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             self.liveActivityID = nil
             return
         }
         await TripLiveActivityManager.shared.update(
             activityID: liveActivityID,
+            expectedSession: presentationSession,
             state: state,
             staleDate: state.leaveBy?.addingTimeInterval(90 * 60)
         )
     }
 
     private func updateWidgetSnapshot() {
+        guard let presentationSession else { return }
         guard let state = model.liveActivityState else {
-            TripWidgetSnapshotStore.clear()
-            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            if TripWidgetSnapshotStore.clearSnapshot(
+                expectedSession: presentationSession
+            ) {
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: ItineraWidgetKind.nextStop
+                )
+            }
             return
         }
         let snapshot = TripWidgetSnapshot(
+            presentationSession: presentationSession,
             tripID: model.trip.jobId,
             tripTitle: model.trip.displayTitle,
             dayNumber: state.dayNumber,
@@ -1085,7 +1253,10 @@ struct TodayTripView: View {
             leaveBy: state.leaveBy,
             progress: state.progress
         )
-        if TripWidgetSnapshotStore.save(snapshot) {
+        if TripWidgetSnapshotStore.save(
+            snapshot,
+            expectedSession: presentationSession
+        ) {
             WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
         }
     }
@@ -1228,7 +1399,7 @@ private struct TodayPreviewContext {
     let calendar: Calendar
     let now: Date
     let trip: SavedItinerary
-    let progressStore: TripProgressStore
+    let progressStore: SessionBoundTripProgressStore
 
     init() {
         var calendar = Calendar(identifier: .gregorian)
@@ -1260,10 +1431,33 @@ private struct TodayPreviewContext {
             error: nil,
             createdAt: "2026-01-01T00:00:00Z"
         )
-        self.progressStore = TripProgressStore(
+        let scope = try! PrincipalScope(
+            validating: String(repeating: "a", count: 64)
+        )
+        let presentationSessionID = UUID(
+            uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        )!
+        let lease = IdentityLease(
+            scope: scope,
+            epoch: 1,
+            presentationSessionID: presentationSessionID
+        )
+        let coordinator = IdentityCoordinator(
+            initialScope: scope,
+            initialEpoch: lease.epoch,
+            initialPresentationSessionID: presentationSessionID
+        )
+        let store = TripProgressStore(
             fileURL: FileManager.default.temporaryDirectory.appending(
                 path: "itinera-adaptive-today-preview-progress.json"
-            )
+            ),
+            lease: lease,
+            identityCoordinator: coordinator
+        )
+        progressStore = SessionBoundTripProgressStore(
+            store: store,
+            lease: lease,
+            identityCoordinator: coordinator
         )
     }
 }

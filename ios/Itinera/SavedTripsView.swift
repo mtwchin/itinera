@@ -1,8 +1,117 @@
 import SwiftUI
 
+enum PrivateLibraryEmptyState: Equatable, Sendable {
+    case serverConfirmedEmpty
+    case noOfflineTrips
+
+    var title: String {
+        switch self {
+        case .serverConfirmedEmpty:
+            return "Your atlas is still empty"
+        case .noOfflineTrips:
+            return "No trips saved offline"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .serverConfirmedEmpty:
+            return "Start with a city and we'll turn it into a day-by-day route."
+        case .noOfflineTrips:
+            return "Connect to the internet to check this private library on the server."
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .serverConfirmedEmpty:
+            return "Plan your first trip"
+        case .noOfflineTrips:
+            return "Check Server Again"
+        }
+    }
+
+    var actionSystemImage: String {
+        switch self {
+        case .serverConfirmedEmpty:
+            return "plus"
+        case .noOfflineTrips:
+            return "arrow.clockwise"
+        }
+    }
+}
+
+struct PrivateLibraryEmptyCard: View {
+    @Environment(\.itineraTheme) private var theme
+
+    let state: PrivateLibraryEmptyState
+    var actionTitle: String?
+    var actionSystemImage: String?
+    var isWorking: Bool
+    let action: () -> Void
+
+    init(
+        state: PrivateLibraryEmptyState,
+        actionTitle: String? = nil,
+        actionSystemImage: String? = nil,
+        isWorking: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.state = state
+        self.actionTitle = actionTitle
+        self.actionSystemImage = actionSystemImage
+        self.isWorking = isWorking
+        self.action = action
+    }
+
+    var body: some View {
+        ItineraSurface {
+            VStack(spacing: 18) {
+                Image(systemName: "map.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(theme.route)
+                    .frame(width: 82, height: 82)
+                    .background(theme.route.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
+
+                VStack(spacing: 7) {
+                    Text(state.title)
+                        .font(.system(.title2, design: .serif, weight: .bold))
+                        .foregroundStyle(theme.primaryText)
+                    Text(state.message)
+                        .font(.subheadline)
+                        .foregroundStyle(theme.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+
+                Button(action: action) {
+                    if isWorking {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .accessibilityHidden(true)
+                            Text("Retrying Session")
+                        }
+                    } else {
+                        Label(
+                            actionTitle ?? state.actionTitle,
+                            systemImage: actionSystemImage
+                                ?? state.actionSystemImage
+                        )
+                    }
+                }
+                .buttonStyle(ItineraPrimaryButtonStyle())
+                .disabled(isWorking)
+                .accessibilityValue(isWorking ? "In progress" : "")
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
 struct SavedTripsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     var onPlanTrip: () -> Void = {}
 
@@ -17,6 +126,13 @@ struct SavedTripsView: View {
     @State private var deleteTarget: SavedItinerary?
     @State private var mutatingTripIDs: Set<String> = []
     @State private var mutationError: String?
+    @State private var isRetryingEmptyLibrary = false
+    @AccessibilityFocusState private var retryErrorIsFocused: Bool
+
+    private var serverSessionNeedsRecovery: Bool {
+        if case .recoveryRequired = appState.identityPhase { return true }
+        return false
+    }
 
     private var localOnlyPendingJobs: [PendingJobRecord] {
         let remoteIDs = Set(trips.map(\.jobId))
@@ -62,8 +178,10 @@ struct SavedTripsView: View {
                             message: "Return to a trip, follow one that's still generating, or start somewhere new."
                         )
 
-                        if let message = mutationError ?? statusMessage, hasTrips {
+                        if let message = mutationError ?? statusMessage,
+                           hasTrips || errorMessage != nil {
                             ItineraStatusBanner(message: message, kind: .warning)
+                                .accessibilityFocused($retryErrorIsFocused)
                         }
 
                         if !hasTrips && !isLoading {
@@ -143,7 +261,8 @@ struct SavedTripsView: View {
                 prompt: "Search trips and stops"
             )
             .task(id: appState.libraryRevision) {
-                await appState.loadPendingJobs()
+                guard let privateAppSession else { return }
+                await appState.loadPendingJobs(session: privateAppSession)
                 await load()
             }
             .alert(
@@ -171,7 +290,7 @@ struct SavedTripsView: View {
                     ).isEmpty
                 )
             } message: {
-                Text("The new name will sync to your trip library.")
+                Text("The new name will be saved to this server library.")
             }
             .confirmationDialog(
                 "Archive trip?",
@@ -208,7 +327,7 @@ struct SavedTripsView: View {
                     deleteTarget = nil
                 }
             } message: { trip in
-                Text("\(trip.displayTitle) and its synced trip data will be permanently removed. This cannot be undone.")
+                Text("\(trip.displayTitle) and its data in this server library will be permanently removed. This cannot be undone.")
             }
         }
     }
@@ -265,6 +384,7 @@ struct SavedTripsView: View {
     }
 
     private func rename(_ trip: SavedItinerary, title: String) async {
+        guard let privateAppSession else { return }
         guard !title.isEmpty, title.count <= 160 else {
             mutationError = "Trip names must contain 1 to 160 characters."
             return
@@ -274,8 +394,10 @@ struct SavedTripsView: View {
         do {
             let response = try await appState.renameTrip(
                 jobID: trip.jobId,
-                title: title
+                title: title,
+                session: privateAppSession
             )
+            guard await appState.isCurrent(privateAppSession) else { return }
             if let index = trips.firstIndex(where: { $0.jobId == trip.jobId }) {
                 trips[index].title = response.title ?? title
             }
@@ -283,60 +405,80 @@ struct SavedTripsView: View {
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             mutationError = error.localizedDescription
         }
     }
 
     private func archive(_ trip: SavedItinerary) async {
+        guard let privateAppSession else { return }
         mutatingTripIDs.insert(trip.jobId)
         defer { mutatingTripIDs.remove(trip.jobId) }
         do {
-            try await appState.archiveTrip(jobID: trip.jobId)
+            try await appState.archiveTrip(
+                jobID: trip.jobId,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             trips.removeAll { $0.jobId == trip.jobId }
             mutationError = nil
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             mutationError = error.localizedDescription
         }
     }
 
     private func duplicate(_ trip: SavedItinerary) async {
+        guard let privateAppSession else { return }
         mutatingTripIDs.insert(trip.jobId)
         defer { mutatingTripIDs.remove(trip.jobId) }
         do {
-            let copy = try await appState.duplicateTrip(jobID: trip.jobId)
+            let copy = try await appState.duplicateTrip(
+                jobID: trip.jobId,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             trips.insert(copy, at: 0)
             mutationError = nil
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             mutationError = error.localizedDescription
         }
     }
 
     private func delete(_ trip: SavedItinerary) async {
+        guard let privateAppSession else { return }
         mutatingTripIDs.insert(trip.jobId)
         defer { mutatingTripIDs.remove(trip.jobId) }
         do {
-            try await appState.deleteTrip(jobID: trip.jobId)
+            try await appState.deleteTrip(
+                jobID: trip.jobId,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             trips.removeAll { $0.jobId == trip.jobId }
             mutationError = nil
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             mutationError = error.localizedDescription
         }
     }
 
     private var statusMessage: String? {
+        if let errorMessage { return errorMessage }
         if isShowingOfflineCopy {
             if let refreshedAt = appState.tripCacheRefreshedAt {
                 return "You're viewing the offline copy saved \(refreshedAt.formatted(.relative(presentation: .named))). Pull to refresh when you're connected."
             }
             return "You're viewing an offline copy. Pull to refresh when you're connected."
         }
-        return errorMessage ?? appState.offlineCacheError ?? appState.persistenceError
+        return appState.offlineCacheError ?? appState.persistenceError
     }
 
     private func sectionMessage(for group: TripLibraryGroup) -> String? {
@@ -358,10 +500,15 @@ struct SavedTripsView: View {
 
     private func todayCard(for trip: SavedItinerary) -> some View {
         NavigationLink {
-            TodayTripView(
-                trip: trip,
-                progressStore: appState.tripProgressStore
-            )
+            if let privateAppSession,
+               let progressStore = appState.tripProgressStore(
+                   session: privateAppSession
+               ) {
+                TodayTripView(
+                    trip: trip,
+                    progressStore: progressStore
+                )
+            }
         } label: {
             ItineraSurface {
                 HStack(spacing: 15) {
@@ -396,33 +543,22 @@ struct SavedTripsView: View {
     }
 
     private var emptyState: some View {
-        ItineraSurface {
-            VStack(spacing: 18) {
-                ZStack {
-                    Circle()
-                        .fill(theme.route.opacity(0.12))
-                        .frame(width: 82, height: 82)
-                    Image(systemName: "map.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(theme.route)
-                }
-
-                VStack(spacing: 7) {
-                    Text("Your atlas is still empty")
-                        .font(.system(.title2, design: .serif, weight: .bold))
-                        .foregroundStyle(theme.primaryText)
-                    Text(errorMessage ?? appState.persistenceError ?? "Start with a city and we'll turn it into a day-by-day route.")
-                        .font(.subheadline)
-                        .foregroundStyle(theme.secondaryText)
-                        .multilineTextAlignment(.center)
-                }
-
-                Button(action: onPlanTrip) {
-                    Label("Plan your first trip", systemImage: "plus")
-                }
-                .buttonStyle(ItineraPrimaryButtonStyle())
+        let state: PrivateLibraryEmptyState = isShowingOfflineCopy
+            ? .noOfflineTrips
+            : .serverConfirmedEmpty
+        return PrivateLibraryEmptyCard(
+            state: state,
+            actionTitle: state == .noOfflineTrips
+                && serverSessionNeedsRecovery
+                ? "Retry Session"
+                : nil,
+            isWorking: isRetryingEmptyLibrary
+        ) {
+            if state == .noOfflineTrips {
+                Task { await retryEmptyLibrary() }
+            } else {
+                onPlanTrip()
             }
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -459,32 +595,75 @@ struct SavedTripsView: View {
     }
 
     private func load() async {
+        guard let privateAppSession else { return }
         isLoading = true
         defer { isLoading = false }
-        await appState.loadCachedTrips()
+        await appState.loadCachedTrips(session: privateAppSession)
+        guard await appState.isCurrent(privateAppSession) else { return }
         if trips.isEmpty, !appState.cachedTrips.isEmpty {
             trips = appState.cachedTrips
             isShowingOfflineCopy = true
         }
-        await appState.resumePendingSubmissions()
+        await appState.resumePendingSubmissions(session: privateAppSession)
         do {
-            trips = try await appState.refreshTripLibrary()
-            await appState.reconcilePending(with: trips)
+            let refreshedTrips = try await appState.refreshTripLibrary(
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
+            trips = refreshedTrips
+            await appState.reconcilePending(
+                with: refreshedTrips,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = nil
             isShowingOfflineCopy = false
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             if !appState.cachedTrips.isEmpty {
                 trips = appState.cachedTrips
-                isShowingOfflineCopy = true
-                errorMessage = nil
-            } else {
-                errorMessage = error.localizedDescription
-                isShowingOfflineCopy = false
             }
+            isShowingOfflineCopy = true
+            errorMessage = nil
         }
     }
+
+    private func retryEmptyLibrary() async {
+        guard !isRetryingEmptyLibrary else { return }
+        guard let privateAppSession else { return }
+        isRetryingEmptyLibrary = true
+        defer { isRetryingEmptyLibrary = false }
+        retryErrorIsFocused = false
+        if serverSessionNeedsRecovery {
+            do {
+                try await appState.retryServerSession(
+                    session: privateAppSession
+                )
+            } catch {
+                guard await appState.isCurrent(privateAppSession) else { return }
+                errorMessage = error.localizedDescription
+                retryErrorIsFocused = true
+                return
+            }
+        }
+        await load()
+    }
+}
+
+#Preview(
+    "Trips · Offline empty · Compact accessibility",
+    traits: .fixedLayout(width: 320, height: 620)
+) {
+    ZStack {
+        ItineraBackground()
+        PrivateLibraryEmptyCard(state: .noOfflineTrips, action: {})
+            .padding(18)
+    }
+    .environment(\.itineraTheme, .atlas)
+    .environment(\.dynamicTypeSize, .accessibility2)
+    .preferredColorScheme(.light)
 }
 
 struct LocalPendingTripRow: View {

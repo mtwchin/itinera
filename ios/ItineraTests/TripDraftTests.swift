@@ -58,33 +58,62 @@ final class TripDraftTests: XCTestCase {
         )
     }
 
-    func testLocalDataCleanerRemovesDraftAndAllLockedStopKeys() throws {
+    func testLocalDataCleanerRemovesOnlyCurrentScopeDraftAndLocks() throws {
         let suiteName = "TripDraftTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(Data([1, 2, 3]), forKey: ItineraLocalDataKeys.tripDraft)
+        let scope = try PrincipalScope(
+            validating: String(repeating: "a", count: 64)
+        )
+        let otherScope = try PrincipalScope(
+            validating: String(repeating: "b", count: 64)
+        )
+        defaults.set(
+            Data([1, 2, 3]),
+            forKey: ItineraLocalDataKeys.tripDraft(for: scope)
+        )
         defaults.set(
             ["activity-1"],
-            forKey: ItineraLocalDataKeys.lockedStopsPrefix + "trip-1"
+            forKey: ItineraLocalDataKeys.lockedStops(
+                for: "trip-1",
+                scope: scope
+            )
         )
         defaults.set(
             ["activity-2"],
-            forKey: ItineraLocalDataKeys.lockedStopsPrefix + "trip-2"
+            forKey: ItineraLocalDataKeys.lockedStops(
+                for: "trip-2",
+                scope: otherScope
+            )
         )
         defaults.set("keep", forKey: "unrelated.preference")
 
-        ItineraLocalDataCleaner.clearTripDraftAndLocks(defaults: defaults)
+        ItineraLocalDataCleaner.clearCurrentScope(
+            scope,
+            defaults: defaults
+        )
 
-        XCTAssertNil(defaults.object(forKey: ItineraLocalDataKeys.tripDraft))
         XCTAssertNil(
             defaults.object(
-                forKey: ItineraLocalDataKeys.lockedStopsPrefix + "trip-1"
+                forKey: ItineraLocalDataKeys.tripDraft(for: scope)
             )
         )
         XCTAssertNil(
             defaults.object(
-                forKey: ItineraLocalDataKeys.lockedStopsPrefix + "trip-2"
+                forKey: ItineraLocalDataKeys.lockedStops(
+                    for: "trip-1",
+                    scope: scope
+                )
             )
+        )
+        XCTAssertEqual(
+            defaults.stringArray(
+                forKey: ItineraLocalDataKeys.lockedStops(
+                    for: "trip-2",
+                    scope: otherScope
+                )
+            ),
+            ["activity-2"]
         )
         XCTAssertEqual(defaults.string(forKey: "unrelated.preference"), "keep")
     }

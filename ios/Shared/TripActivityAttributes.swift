@@ -1,8 +1,8 @@
 import ActivityKit
 import Foundation
 
-struct TripActivityAttributes: ActivityAttributes {
-    struct ContentState: Codable, Hashable {
+struct TripActivityAttributes: ActivityAttributes, Sendable {
+    struct ContentState: Codable, Hashable, Sendable {
         let dayNumber: Int
         let stopNumber: Int
         let totalStops: Int
@@ -30,6 +30,7 @@ struct TripActivityAttributes: ActivityAttributes {
         }
     }
 
+    let presentationSession: PrivatePresentationSession
     let tripID: String
     let tripTitle: String
 }

@@ -7,21 +7,25 @@ final class CompletedTripCacheTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let fileURL = root.appending(path: "completed.json")
+        let storage = try PrivateStorageTestContext()
 
         let ready = savedTrip(id: "ready", status: .succeeded, result: .preview)
         let pending = savedTrip(id: "pending", status: .pending, result: nil)
         let failed = savedTrip(id: "failed", status: .failed, result: nil)
         let refreshDate = Date(timeIntervalSince1970: 1_000)
 
-        let store = CompletedTripCache(fileURL: fileURL)
+        let store = storage.completedTripCache(fileURL: fileURL)
         let written = try await store.replace(
             with: [pending, failed, ready],
-            refreshedAt: refreshDate
+            refreshedAt: refreshDate,
+            lease: storage.lease
         )
         XCTAssertEqual(written.trips.map(\.jobId), ["ready"])
         XCTAssertEqual(written.refreshedAt, refreshDate)
 
-        let reloaded = try await CompletedTripCache(fileURL: fileURL).load()
+        let reloaded = try await storage.completedTripCache(
+            fileURL: fileURL
+        ).load()
         XCTAssertEqual(reloaded?.trips.map(\.jobId), ["ready"])
         XCTAssertEqual(reloaded?.trips.first?.result, .preview)
         XCTAssertEqual(reloaded?.refreshedAt, refreshDate)
@@ -31,13 +35,16 @@ final class CompletedTripCacheTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let fileURL = root.appending(path: "completed.json")
-        let store = CompletedTripCache(fileURL: fileURL)
+        let storage = try PrivateStorageTestContext()
+        let store = storage.completedTripCache(fileURL: fileURL)
 
         _ = try await store.upsert(
-            savedTrip(id: "ready", title: "First", result: .preview)
+            savedTrip(id: "ready", title: "First", result: .preview),
+            lease: storage.lease
         )
         let snapshot = try await store.upsert(
-            savedTrip(id: "ready", title: "Renamed", result: .preview)
+            savedTrip(id: "ready", title: "Renamed", result: .preview),
+            lease: storage.lease
         )
 
         XCTAssertEqual(snapshot.trips.count, 1)
@@ -48,21 +55,27 @@ final class CompletedTripCacheTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let fileURL = root.appending(path: "completed.json")
-        let store = CompletedTripCache(fileURL: fileURL)
+        let storage = try PrivateStorageTestContext()
+        let store = storage.completedTripCache(fileURL: fileURL)
         let refreshDate = Date(timeIntervalSince1970: 1_000)
         _ = try await store.replace(
             with: [savedTrip(id: "ready", result: .preview)],
-            refreshedAt: refreshDate
+            refreshedAt: refreshDate,
+            lease: storage.lease
         )
 
         let renamed = try await store.rename(
             jobID: "ready",
-            title: "Summer in Lisbon"
+            title: "Summer in Lisbon",
+            lease: storage.lease
         )
         XCTAssertEqual(renamed?.trips.first?.title, "Summer in Lisbon")
         XCTAssertEqual(renamed?.refreshedAt, refreshDate)
 
-        let removed = try await store.remove(jobID: "ready")
+        let removed = try await store.remove(
+            jobID: "ready",
+            lease: storage.lease
+        )
         XCTAssertTrue(removed?.trips.isEmpty == true)
         XCTAssertEqual(removed?.refreshedAt, refreshDate)
     }
@@ -70,19 +83,27 @@ final class CompletedTripCacheTests: XCTestCase {
     func testArchivedTripRemainsInOfflinePackAndCanBeRestored() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = CompletedTripCache(
+        let storage = try PrivateStorageTestContext()
+        let store = storage.completedTripCache(
             fileURL: root.appending(path: "completed.json")
         )
         var archived = savedTrip(id: "archived", result: .preview)
         archived.archivedAt = "2026-07-12T12:00:00Z"
 
-        let snapshot = try await store.replace(with: [archived])
-        let afterUpsert = try await store.upsert(archived)
+        let snapshot = try await store.replace(
+            with: [archived],
+            lease: storage.lease
+        )
+        let afterUpsert = try await store.upsert(
+            archived,
+            lease: storage.lease
+        )
         let restored = try await store.setArchivedAt(
             jobID: archived.jobId,
-            archivedAt: nil
+            archivedAt: nil,
+            lease: storage.lease
         )
-        let reloaded = try await CompletedTripCache(
+        let reloaded = try await storage.completedTripCache(
             fileURL: root.appending(path: "completed.json")
         ).load()
 

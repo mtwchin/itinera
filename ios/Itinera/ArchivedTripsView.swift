@@ -3,6 +3,7 @@ import SwiftUI
 struct ArchivedTripsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     @State private var trips: [SavedItinerary] = []
     @State private var isLoading = false
@@ -98,41 +99,59 @@ struct ArchivedTripsView: View {
                 deleteTarget = nil
             }
         } message: { trip in
-            Text("\(trip.displayTitle) and its synced trip data will be permanently removed. This cannot be undone.")
+            Text("\(trip.displayTitle) and its data in this server library will be permanently removed. This cannot be undone.")
         }
     }
 
     private func load() async {
+        guard let privateAppSession else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            trips = try await appState.archivedTrips()
+            let loadedTrips = try await appState.archivedTrips(
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
+            trips = loadedTrips
             errorMessage = nil
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func restore(_ trip: SavedItinerary) async {
+        guard let privateAppSession else { return }
         workingIDs.insert(trip.jobId)
         defer { workingIDs.remove(trip.jobId) }
         do {
-            try await appState.restoreTrip(trip)
+            try await appState.restoreTrip(
+                trip,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             trips.removeAll { $0.jobId == trip.jobId }
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func delete(_ trip: SavedItinerary) async {
+        guard let privateAppSession else { return }
         workingIDs.insert(trip.jobId)
         defer { workingIDs.remove(trip.jobId) }
         do {
-            try await appState.deleteTrip(jobID: trip.jobId)
+            try await appState.deleteTrip(
+                jobID: trip.jobId,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             trips.removeAll { $0.jobId == trip.jobId }
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }

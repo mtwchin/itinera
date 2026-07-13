@@ -5,8 +5,9 @@ struct TripFormView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @Environment(\.itineraTheme) private var theme
-    @AppStorage(ItineraLocalDataKeys.tripDraft) private var savedDraftData = Data()
+    @Environment(\.privateAppSession) private var privateAppSession
 
+    @State private var savedDraftData = Data()
     @State private var destinationQuery = ""
     @State private var destination: SelectedLocation?
     @State private var homeBaseQuery = ""
@@ -149,10 +150,29 @@ struct TripFormView: View {
                 clampScheduleDateToTrip()
                 discardScheduleConstraintsOutsideTrip()
             }
-            .onAppear(perform: restoreDraft)
+            .onAppear {
+                guard let privateAppSession else { return }
+                Task {
+                    let loadedDraftData = await appState.loadTripDraftData(
+                        session: privateAppSession
+                    )
+                    guard await appState.isCurrent(privateAppSession) else {
+                        return
+                    }
+                    savedDraftData = loadedDraftData
+                    restoreDraft()
+                }
+            }
             .onChange(of: draftSnapshot) { _, draft in
-                if let encoded = TripDraftCodec.encode(draft) {
+                if let privateAppSession,
+                   let encoded = TripDraftCodec.encode(draft) {
                     savedDraftData = encoded
+                    Task {
+                        await appState.saveTripDraftData(
+                            encoded,
+                            session: privateAppSession
+                        )
+                    }
                 }
             }
         }
@@ -1088,18 +1108,22 @@ struct TripFormView: View {
                 ?? TimeZone.current.identifier
         )
         Task {
+            guard let privateAppSession else { return }
             isSubmitting = true
             errorMessage = nil
             defer { isSubmitting = false }
             do {
                 let job = try await appState.submitItinerary(
                     payload,
-                    title: destination.destinationInputLabel
+                    title: destination.destinationInputLabel,
+                    session: privateAppSession
                 )
+                guard await appState.isCurrent(privateAppSession) else { return }
                 pendingJob = PendingJob(id: job.jobId)
             } catch is CancellationError {
                 return
             } catch {
+                guard await appState.isCurrent(privateAppSession) else { return }
                 errorMessage = error.localizedDescription
             }
         }

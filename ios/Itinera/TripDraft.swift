@@ -1,17 +1,67 @@
 import Foundation
 
 enum ItineraLocalDataKeys {
+    private static let prefix = "itinera.private.v1."
+
+    static func tripDraft(for scope: PrincipalScope) -> String {
+        prefix + scope.digest + ".tripDraft"
+    }
+
+    static func lockedStopsPrefix(for scope: PrincipalScope) -> String {
+        prefix + scope.digest + ".lockedStops."
+    }
+
+    static func lockedStops(
+        for tripID: String,
+        scope: PrincipalScope
+    ) -> String {
+        lockedStopsPrefix(for: scope) + tripID
+    }
+}
+
+/// These constants exist only so bootstrap can destroy ambiguous pre-D2 data.
+/// They must never be used to load, display, or submit private state.
+enum ItineraLegacyPrivateDataKeys {
     static let tripDraft = "itinera.tripDraft.v1"
     static let lockedStopsPrefix = "trip.lockedStops."
 }
 
 enum ItineraLocalDataCleaner {
-    static func clearTripDraftAndLocks(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: ItineraLocalDataKeys.tripDraft)
+    static func clearCurrentScope(
+        _ scope: PrincipalScope,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.removeObject(
+            forKey: ItineraLocalDataKeys.tripDraft(for: scope)
+        )
+        let prefix = ItineraLocalDataKeys.lockedStopsPrefix(for: scope)
         for key in defaults.dictionaryRepresentation().keys
-            where key.hasPrefix(ItineraLocalDataKeys.lockedStopsPrefix) {
+            where key.hasPrefix(prefix) {
             defaults.removeObject(forKey: key)
         }
+    }
+
+    @discardableResult
+    static func quarantineLegacyUnscopedData(
+        defaults: UserDefaults = .standard
+    ) -> Int {
+        var removedCount = 0
+        if defaults.object(
+            forKey: ItineraLegacyPrivateDataKeys.tripDraft
+        ) != nil {
+            removedCount += 1
+            defaults.removeObject(
+                forKey: ItineraLegacyPrivateDataKeys.tripDraft
+            )
+        }
+        for key in defaults.dictionaryRepresentation().keys.sorted()
+            where key.hasPrefix(
+                ItineraLegacyPrivateDataKeys.lockedStopsPrefix
+            ) {
+            removedCount += 1
+            defaults.removeObject(forKey: key)
+        }
+        return removedCount
     }
 }
 

@@ -30,14 +30,24 @@ actor CompletedTripCache {
     private static let currentSchemaVersion = 1
 
     private let fileURL: URL
-    private let fileManager: FileManager
+    private let boundLease: IdentityLease
+    private let identityCoordinator: IdentityCoordinator
+    private let beforeCommit: PrincipalStorageBeforeCommit?
+    private var fileManager: FileManager { .default }
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedSnapshot: CompletedTripCacheSnapshot?
 
-    init(fileURL: URL, fileManager: FileManager = .default) {
+    init(
+        fileURL: URL,
+        lease: IdentityLease,
+        identityCoordinator: IdentityCoordinator,
+        beforeCommit: PrincipalStorageBeforeCommit? = nil
+    ) {
         self.fileURL = fileURL
-        self.fileManager = fileManager
+        boundLease = lease
+        self.identityCoordinator = identityCoordinator
+        self.beforeCommit = beforeCommit
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -47,18 +57,6 @@ actor CompletedTripCache {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         self.decoder = decoder
-    }
-
-    static func live() -> CompletedTripCache {
-        let root = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        return CompletedTripCache(
-            fileURL: root
-                .appending(path: "Itinera", directoryHint: .isDirectory)
-                .appending(path: "completed-trips-v1.json")
-        )
     }
 
     func load() throws -> CompletedTripCacheSnapshot? {
@@ -86,21 +84,31 @@ actor CompletedTripCache {
     @discardableResult
     func replace(
         with trips: [SavedItinerary],
-        refreshedAt: Date = Date()
-    ) throws -> CompletedTripCacheSnapshot {
-        try persist(
+        refreshedAt: Date = Date(),
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot {
+        try await validateMutation(lease)
+        return try await persist(
             trips: Self.cacheableTrips(from: trips),
-            refreshedAt: refreshedAt
+            refreshedAt: refreshedAt,
+            lease: lease
         )
     }
 
     @discardableResult
     func upsert(
         _ trip: SavedItinerary,
-        refreshedAt: Date = Date()
-    ) throws -> CompletedTripCacheSnapshot {
+        refreshedAt: Date = Date(),
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot {
+        try await validateMutation(lease)
         guard trip.status == .succeeded, trip.result != nil else {
-            return try load() ?? persist(trips: [], refreshedAt: refreshedAt)
+            if let snapshot = try load() { return snapshot }
+            return try await persist(
+                trips: [],
+                refreshedAt: refreshedAt,
+                lease: lease
+            )
         }
 
         let existingSnapshot = try load()
@@ -109,91 +117,112 @@ actor CompletedTripCache {
         trips.append(trip)
         // An upsert makes a new result available offline, but it is not a full
         // server-library refresh. Keep the last successful sync time truthful.
-        return try persist(
+        return try await persist(
             trips: trips,
-            refreshedAt: existingSnapshot?.refreshedAt ?? refreshedAt
+            refreshedAt: existingSnapshot?.refreshedAt ?? refreshedAt,
+            lease: lease
         )
     }
 
     @discardableResult
     func rename(
         jobID: String,
-        title: String
-    ) throws -> CompletedTripCacheSnapshot? {
+        title: String,
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot? {
+        try await validateMutation(lease)
         guard let snapshot = try load() else { return nil }
         var trips = snapshot.trips
         guard let index = trips.firstIndex(where: { $0.jobId == jobID }) else {
             return snapshot
         }
         trips[index].title = title
-        return try persist(trips: trips, refreshedAt: snapshot.refreshedAt)
+        return try await persist(
+            trips: trips,
+            refreshedAt: snapshot.refreshedAt,
+            lease: lease
+        )
     }
 
     @discardableResult
     func setArchivedAt(
         jobID: String,
-        archivedAt: String?
-    ) throws -> CompletedTripCacheSnapshot? {
+        archivedAt: String?,
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot? {
+        try await validateMutation(lease)
         guard let snapshot = try load() else { return nil }
         var trips = snapshot.trips
         guard let index = trips.firstIndex(where: { $0.jobId == jobID }) else {
             return snapshot
         }
         trips[index].archivedAt = archivedAt
-        return try persist(trips: trips, refreshedAt: snapshot.refreshedAt)
+        return try await persist(
+            trips: trips,
+            refreshedAt: snapshot.refreshedAt,
+            lease: lease
+        )
     }
 
     @discardableResult
-    func remove(jobID: String) throws -> CompletedTripCacheSnapshot? {
+    func remove(
+        jobID: String,
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot? {
+        try await validateMutation(lease)
         guard let snapshot = try load() else { return nil }
         let trips = snapshot.trips.filter { $0.jobId != jobID }
         guard trips.count != snapshot.trips.count else { return snapshot }
-        return try persist(trips: trips, refreshedAt: snapshot.refreshedAt)
+        return try await persist(
+            trips: trips,
+            refreshedAt: snapshot.refreshedAt,
+            lease: lease
+        )
     }
 
-    func removeAll() throws {
+    func removeAll(lease: IdentityLease) async throws {
+        try await validateMutation(lease)
+        let fileCommit = PrivateStorageFileCommit.remove(fileURL)
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(ifCurrent: lease) {
+            try fileCommit.perform()
+        }
         cachedSnapshot = nil
-        guard fileManager.fileExists(atPath: fileURL.path) else { return }
-        try fileManager.removeItem(at: fileURL)
     }
 
     private func persist(
         trips: [SavedItinerary],
-        refreshedAt: Date
-    ) throws -> CompletedTripCacheSnapshot {
+        refreshedAt: Date,
+        lease: IdentityLease
+    ) async throws -> CompletedTripCacheSnapshot {
         let sortedTrips = Self.sorted(trips)
         let envelope = Envelope(
             schemaVersion: Self.currentSchemaVersion,
             refreshedAt: refreshedAt,
             trips: sortedTrips
         )
-        let directory = fileURL.deletingLastPathComponent()
-        try fileManager.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        var directoryValues = URLResourceValues()
-        directoryValues.isExcludedFromBackup = true
-        var mutableDirectory = directory
-        try? mutableDirectory.setResourceValues(directoryValues)
-
-        try encoder.encode(envelope).write(to: fileURL, options: [.atomic])
-        #if os(iOS)
-        try fileManager.setAttributes(
-            [
-                .protectionKey:
-                    FileProtectionType.completeUntilFirstUserAuthentication
-            ],
-            ofItemAtPath: fileURL.path
-        )
-        #endif
-
         let snapshot = CompletedTripCacheSnapshot(
             trips: sortedTrips,
             refreshedAt: refreshedAt
         )
+        let encoded = try encoder.encode(envelope)
+        let fileCommit = PrivateStorageFileCommit.replaceProtected(
+            data: encoded,
+            fileURL: fileURL
+        )
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(ifCurrent: lease) {
+            try fileCommit.perform()
+        }
         cachedSnapshot = snapshot
         return snapshot
+    }
+
+    private func validateMutation(_ lease: IdentityLease) async throws {
+        guard lease == boundLease else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
+        try await identityCoordinator.validate(lease)
     }
 
     private static func cacheableTrips(

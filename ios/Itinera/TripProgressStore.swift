@@ -24,6 +24,63 @@ struct TripStopProgress: Codable, Hashable, Sendable {
     let updatedAt: Date
 }
 
+/// An immutable, identity-bound capability for one private library's trip
+/// progress. Callers cannot use it to select whichever namespace happens to
+/// be current later, and scoped read results remain fenced at publication.
+struct SessionBoundTripProgressStore: Sendable {
+    let lease: IdentityLease
+    private let store: TripProgressStore
+    private let identityCoordinator: IdentityCoordinator
+
+    init(
+        store: TripProgressStore,
+        lease: IdentityLease,
+        identityCoordinator: IdentityCoordinator
+    ) {
+        self.store = store
+        self.lease = lease
+        self.identityCoordinator = identityCoordinator
+    }
+
+    func progress(
+        for tripID: String
+    ) async throws -> IdentityScopedValue<[TripStopID: TripStopStatus]> {
+        let value = try await store.progress(for: tripID, lease: lease)
+        return IdentityScopedValue(value: value, lease: lease)
+    }
+
+    func status(
+        for stopID: TripStopID
+    ) async throws -> IdentityScopedValue<TripStopStatus> {
+        let value = try await store.status(for: stopID, lease: lease)
+        return IdentityScopedValue(value: value, lease: lease)
+    }
+
+    func set(
+        _ status: TripStopStatus,
+        for stopID: TripStopID,
+        updatedAt: Date = Date()
+    ) async throws {
+        try await store.set(
+            status,
+            for: stopID,
+            updatedAt: updatedAt,
+            lease: lease
+        )
+    }
+
+    func canPublish<Value: Sendable>(
+        _ scopedValue: IdentityScopedValue<Value>
+    ) async -> Bool {
+        guard scopedValue.lease == lease else { return false }
+        return await identityCoordinator.isCurrent(lease)
+    }
+
+    func isCurrent() async -> Bool {
+        await identityCoordinator.isCurrent(lease)
+    }
+}
+
 /// Device-local trip progress. This intentionally stays separate from the
 /// itinerary payload, allowing a refreshed offline trip to retain its state.
 actor TripProgressStore {
@@ -35,14 +92,27 @@ actor TripProgressStore {
     private static let currentSchemaVersion = 1
 
     private let fileURL: URL
-    private let fileManager: FileManager
+    private let boundLease: IdentityLease
+    private let identityCoordinator: IdentityCoordinator
+    private let beforeRead: PrincipalStorageBeforeCommit?
+    private let beforeCommit: PrincipalStorageBeforeCommit?
+    private var fileManager: FileManager { .default }
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedRecords: [TripStopProgress]?
 
-    init(fileURL: URL, fileManager: FileManager = .default) {
+    init(
+        fileURL: URL,
+        lease: IdentityLease,
+        identityCoordinator: IdentityCoordinator,
+        beforeRead: PrincipalStorageBeforeCommit? = nil,
+        beforeCommit: PrincipalStorageBeforeCommit? = nil
+    ) {
         self.fileURL = fileURL
-        self.fileManager = fileManager
+        boundLease = lease
+        self.identityCoordinator = identityCoordinator
+        self.beforeRead = beforeRead
+        self.beforeCommit = beforeCommit
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -54,35 +124,40 @@ actor TripProgressStore {
         self.decoder = decoder
     }
 
-    static func live() -> TripProgressStore {
-        let root = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        return TripProgressStore(
-            fileURL: root
-                .appending(path: "Itinera", directoryHint: .isDirectory)
-                .appending(path: "trip-progress-v1.json")
-        )
-    }
-
-    func progress(for tripID: String) throws -> [TripStopID: TripStopStatus] {
-        Dictionary(
+    func progress(
+        for tripID: String,
+        lease: IdentityLease
+    ) async throws -> [TripStopID: TripStopStatus] {
+        try await validateRead(lease)
+        if let beforeRead { await beforeRead(lease) }
+        let value = Dictionary(
             uniqueKeysWithValues: try all()
                 .filter { $0.stopID.tripID == tripID }
                 .map { ($0.stopID, $0.status) }
         )
+        try await validateRead(lease)
+        return value
     }
 
-    func status(for stopID: TripStopID) throws -> TripStopStatus {
-        try all().first { $0.stopID == stopID }?.status ?? .upcoming
+    func status(
+        for stopID: TripStopID,
+        lease: IdentityLease
+    ) async throws -> TripStopStatus {
+        try await validateRead(lease)
+        if let beforeRead { await beforeRead(lease) }
+        let value = try all().first { $0.stopID == stopID }?.status
+            ?? .upcoming
+        try await validateRead(lease)
+        return value
     }
 
     func set(
         _ status: TripStopStatus,
         for stopID: TripStopID,
-        updatedAt: Date = Date()
-    ) throws {
+        updatedAt: Date = Date(),
+        lease: IdentityLease
+    ) async throws {
+        try await validateMutation(lease)
         var records = try all().filter { $0.stopID != stopID }
         if status != .upcoming {
             records.append(
@@ -93,17 +168,28 @@ actor TripProgressStore {
                 )
             )
         }
-        try persist(records)
+        try await persist(records, lease: lease)
     }
 
-    func removeProgress(for tripID: String) throws {
-        try persist(try all().filter { $0.stopID.tripID != tripID })
+    func removeProgress(
+        for tripID: String,
+        lease: IdentityLease
+    ) async throws {
+        try await validateMutation(lease)
+        try await persist(
+            try all().filter { $0.stopID.tripID != tripID },
+            lease: lease
+        )
     }
 
-    func removeAll() throws {
+    func removeAll(lease: IdentityLease) async throws {
+        try await validateMutation(lease)
+        let fileCommit = PrivateStorageFileCommit.remove(fileURL)
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(ifCurrent: lease) {
+            try fileCommit.perform()
+        }
         cachedRecords = []
-        guard fileManager.fileExists(atPath: fileURL.path) else { return }
-        try fileManager.removeItem(at: fileURL)
     }
 
     private func all() throws -> [TripStopProgress] {
@@ -125,7 +211,10 @@ actor TripProgressStore {
         return envelope.records
     }
 
-    private func persist(_ records: [TripStopProgress]) throws {
+    private func persist(
+        _ records: [TripStopProgress],
+        lease: IdentityLease
+    ) async throws {
         let sorted = records.sorted {
             if $0.stopID.tripID != $1.stopID.tripID {
                 return $0.stopID.tripID < $1.stopID.tripID
@@ -135,27 +224,31 @@ actor TripProgressStore {
             }
             return $0.stopID.activityID < $1.stopID.activityID
         }
-        let directory = fileURL.deletingLastPathComponent()
-        try fileManager.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        var directoryValues = URLResourceValues()
-        directoryValues.isExcludedFromBackup = true
-        var mutableDirectory = directory
-        try? mutableDirectory.setResourceValues(directoryValues)
-        try encoder.encode(
+        let encoded = try encoder.encode(
             Envelope(schemaVersion: Self.currentSchemaVersion, records: sorted)
-        ).write(to: fileURL, options: [.atomic])
-        #if os(iOS)
-        try fileManager.setAttributes(
-            [
-                .protectionKey:
-                    FileProtectionType.completeUntilFirstUserAuthentication
-            ],
-            ofItemAtPath: fileURL.path
         )
-        #endif
+        let fileCommit = PrivateStorageFileCommit.replaceProtected(
+            data: encoded,
+            fileURL: fileURL
+        )
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(ifCurrent: lease) {
+            try fileCommit.perform()
+        }
         cachedRecords = sorted
+    }
+
+    private func validateMutation(_ lease: IdentityLease) async throws {
+        guard lease == boundLease else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
+        try await identityCoordinator.validate(lease)
+    }
+
+    private func validateRead(_ lease: IdentityLease) async throws {
+        guard lease == boundLease else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
+        try await identityCoordinator.validate(lease)
     }
 }

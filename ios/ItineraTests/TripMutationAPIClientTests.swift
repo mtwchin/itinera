@@ -9,7 +9,7 @@ final class TripMutationAPIClientTests: XCTestCase {
     }
 
     func testUpdateTripSendsPatchAndDecodesMutationResponse() async throws {
-        let client = makeClient()
+        let client = makeClient().privateAPI
         TripMutationURLProtocolStub.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/v1/itineraries/job-123")
             XCTAssertEqual(request.httpMethod, "PATCH")
@@ -48,7 +48,7 @@ final class TripMutationAPIClientTests: XCTestCase {
     }
 
     func testArchiveSendsArchivedFlag() async throws {
-        let client = makeClient()
+        let client = makeClient().privateAPI
         TripMutationURLProtocolStub.handler = { request in
             XCTAssertEqual(request.httpMethod, "PATCH")
             let body = try XCTUnwrap(request.tripMutationBodyData)
@@ -77,7 +77,7 @@ final class TripMutationAPIClientTests: XCTestCase {
     }
 
     func testDeleteTripAcceptsEmptyNoContentResponse() async throws {
-        let client = makeClient()
+        let client = makeClient().privateAPI
         TripMutationURLProtocolStub.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/v1/itineraries/job-123")
             XCTAssertEqual(request.httpMethod, "DELETE")
@@ -88,7 +88,7 @@ final class TripMutationAPIClientTests: XCTestCase {
     }
 
     func testArchivedLibraryUsesIncludeArchivedQueryAndDecodesFlag() async throws {
-        let client = makeClient()
+        let client = makeClient().privateAPI
         TripMutationURLProtocolStub.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/v1/itineraries")
             XCTAssertEqual(request.url?.query, "include_archived=true")
@@ -125,7 +125,7 @@ final class TripMutationAPIClientTests: XCTestCase {
     }
 
     func testRestoreSendsArchivedFalse() async throws {
-        let client = makeClient()
+        let client = makeClient().privateAPI
         TripMutationURLProtocolStub.handler = { request in
             XCTAssertEqual(request.httpMethod, "PATCH")
             let body = try XCTUnwrap(request.tripMutationBodyData)
@@ -159,14 +159,15 @@ final class TripMutationAPIClientTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = CompletedTripCache(
-            fileURL: root.appending(path: "completed.json")
-        )
-        let progressStore = TripProgressStore(
-            fileURL: root.appending(path: "progress.json")
-        )
+        let harness = makeAppHarness(root: root)
+        let cache = harness.stores.completedTripCache
+        let progressStore = harness.stores.tripProgressStore
+        let session = harness.session
         let archivedTrip = makeSavedTrip(archivedAt: nil)
-        _ = try await cache.replace(with: [archivedTrip])
+        _ = try await cache.replace(
+            with: [archivedTrip],
+            lease: session.lease
+        )
         let activity = try XCTUnwrap(
             archivedTrip.result?.itinerary.first?.activities.first
         )
@@ -175,19 +176,12 @@ final class TripMutationAPIClientTests: XCTestCase {
             day: 1,
             activity: activity
         )
-        try await progressStore.set(.completed, for: stopID)
-
-        let appState = AppState(
-            apiClient: makeClient(),
-            pendingJobStore: PendingJobStore(
-                fileURL: root.appending(path: "pending.json")
-            ),
-            pendingSubmissionStore: PendingSubmissionStore(
-                fileURL: root.appending(path: "submissions.json")
-            ),
-            completedTripCache: cache,
-            tripProgressStore: progressStore
+        try await progressStore.set(
+            .completed,
+            for: stopID,
+            lease: session.lease
         )
+        let appState = harness.appState
         TripMutationURLProtocolStub.handler = { request in
             let body = try XCTUnwrap(request.tripMutationBodyData)
             let json = try XCTUnwrap(
@@ -209,8 +203,14 @@ final class TripMutationAPIClientTests: XCTestCase {
             )
         }
 
-        try await appState.archiveTrip(jobID: archivedTrip.jobId)
-        let statusAfterArchive = try await progressStore.status(for: stopID)
+        try await appState.archiveTrip(
+            jobID: archivedTrip.jobId,
+            session: session
+        )
+        let statusAfterArchive = try await progressStore.status(
+            for: stopID,
+            lease: session.lease
+        )
         let cacheAfterArchive = try await cache.load()
         XCTAssertEqual(statusAfterArchive, .completed)
         XCTAssertEqual(cacheAfterArchive?.trips.map(\.jobId), ["job-123"])
@@ -219,7 +219,7 @@ final class TripMutationAPIClientTests: XCTestCase {
 
         var serverArchivedTrip = archivedTrip
         serverArchivedTrip.archivedAt = "2026-07-12T12:00:00Z"
-        try await appState.restoreTrip(serverArchivedTrip)
+        try await appState.restoreTrip(serverArchivedTrip, session: session)
         let cacheAfterRestore = try await cache.load()
         XCTAssertEqual(cacheAfterRestore?.trips.map(\.jobId), ["job-123"])
         XCTAssertNil(cacheAfterRestore?.trips.first?.archivedAt)
@@ -231,10 +231,9 @@ final class TripMutationAPIClientTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = CompletedTripCache(
-            fileURL: root.appending(path: "completed.json")
-        )
-        let appState = makeAppState(root: root, cache: cache)
+        let harness = makeAppHarness(root: root)
+        let cache = harness.stores.completedTripCache
+        let appState = harness.appState
         var authoritative = makeSavedTrip(archivedAt: nil)
         authoritative.title = "Authoritative Lisbon"
         authoritative.city = "Lisbon"
@@ -257,7 +256,8 @@ final class TripMutationAPIClientTests: XCTestCase {
 
         await appState.cacheCompletedTrip(
             jobID: authoritative.jobId,
-            itinerary: .preview
+            itinerary: .preview,
+            session: harness.session
         )
 
         let snapshot = try await cache.load()
@@ -278,11 +278,14 @@ final class TripMutationAPIClientTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = CompletedTripCache(
-            fileURL: root.appending(path: "completed.json")
+        let harness = makeAppHarness(root: root)
+        let cache = harness.stores.completedTripCache
+        let appState = harness.appState
+        await appState.registerPending(
+            jobID: "job-123",
+            title: "Offline Lisbon",
+            session: harness.session
         )
-        let appState = makeAppState(root: root, cache: cache)
-        await appState.registerPending(jobID: "job-123", title: "Offline Lisbon")
         var fallbackResult = Itinerary.preview
         fallbackResult.itinerary[0].theme = "Polled fallback"
 
@@ -296,7 +299,8 @@ final class TripMutationAPIClientTests: XCTestCase {
 
         await appState.cacheCompletedTrip(
             jobID: "job-123",
-            itinerary: fallbackResult
+            itinerary: fallbackResult,
+            session: harness.session
         )
 
         let snapshot = try await cache.load()
@@ -313,12 +317,14 @@ final class TripMutationAPIClientTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = CompletedTripCache(
-            fileURL: root.appending(path: "completed.json")
-        )
+        let harness = makeAppHarness(root: root)
+        let cache = harness.stores.completedTripCache
         let original = makeSavedTrip(archivedAt: nil)
-        _ = try await cache.replace(with: [original])
-        let appState = makeAppState(root: root, cache: cache)
+        _ = try await cache.replace(
+            with: [original],
+            lease: harness.session.lease
+        )
+        let appState = harness.appState
         var revisedResult = Itinerary.preview
         revisedResult.itinerary[0].theme = "Latest offline revision"
         let revision = ItineraryRevisionResponse(
@@ -353,7 +359,8 @@ final class TripMutationAPIClientTests: XCTestCase {
             expectedVersion: 1,
             operations: [
                 .reorderActivity(day: 1, fromIndex: 0, toIndex: 1)
-            ]
+            ],
+            session: harness.session
         )
 
         XCTAssertEqual(response.toVersion, 2)
@@ -374,10 +381,32 @@ final class TripMutationAPIClientTests: XCTestCase {
         XCTAssertEqual(appState.libraryRevision, 1)
     }
 
-    private func makeClient() -> APIClient {
+    private struct ClientHarness {
+        let context: PrivateStorageTestContext
+        let client: APIClient
+        let privateAPI: IdentityBoundAPIClient
+
+        var session: PrivateAppSession {
+            PrivateAppSession(lease: context.lease)
+        }
+    }
+
+    @MainActor
+    private struct AppHarness {
+        let clientHarness: ClientHarness
+        let stores: PrincipalStoreSet
+        let appState: AppState
+
+        var session: PrivateAppSession { clientHarness.session }
+    }
+
+    private func makeClient(
+        context: PrivateStorageTestContext? = nil
+    ) -> ClientHarness {
+        let context = context ?? makeStorageContext()
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [TripMutationURLProtocolStub.self]
-        return APIClient(
+        let client = APIClient(
             configuration: APIConfiguration(
                 baseURL: URL(string: "https://example.test")!,
                 requestTimeout: 2,
@@ -385,29 +414,65 @@ final class TripMutationAPIClientTests: XCTestCase {
             ),
             session: URLSession(configuration: sessionConfiguration),
             credentialStore: TripMutationCredentialStore(),
+            identityCoordinator: context.identityCoordinator,
             now: { Date(timeIntervalSince1970: 2_000_000_000) }
+        )
+        return ClientHarness(
+            context: context,
+            client: client,
+            privateAPI: client.bound(to: context.lease)
         )
     }
 
     @MainActor
-    private func makeAppState(
-        root: URL,
-        cache: CompletedTripCache
-    ) -> AppState {
-        AppState(
-            apiClient: makeClient(),
-            pendingJobStore: PendingJobStore(
-                fileURL: root.appending(path: "pending.json")
+    private func makeAppHarness(root: URL) -> AppHarness {
+        let clientHarness = makeClient()
+        let factory = PrincipalStorageFactory(
+            applicationSupportDirectory: root,
+            identityCoordinator: clientHarness.context.identityCoordinator
+        )
+        let suiteName = "TripMutationAPIClientTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaultsDomain = try! PrivateStorageDefaultsDomain(
+            suiteName: suiteName
+        )
+        let stores = factory.makeStoreSet(
+            for: clientHarness.context.lease,
+            defaultsDomain: defaultsDomain
+        )
+        let appState = AppState(
+            apiClient: clientHarness.client,
+            identityCoordinator: clientHarness.context.identityCoordinator,
+            storageFactory: factory,
+            defaults: defaults,
+            defaultsDomain: defaultsDomain,
+            surfaceCoordinator: TripMutationSurfaceCoordinator(
+                activeSession: clientHarness.session.presentationSession
             ),
-            pendingSubmissionStore: PendingSubmissionStore(
-                fileURL: root.appending(path: "submissions.json")
-            ),
-            completedTripCache: cache,
-            tripProgressStore: TripProgressStore(
-                fileURL: root.appending(path: "progress.json")
-            )
+            initialStoreSet: stores
+        )
+        return AppHarness(
+            clientHarness: clientHarness,
+            stores: stores,
+            appState: appState
         )
     }
+
+    private func makeStorageContext() -> PrivateStorageTestContext {
+        let identity = try! PrincipalIdentity(
+            serverUserID: Self.testUserID
+        )
+        return try! PrivateStorageTestContext(
+            scopeDigest: identity.scope.digest,
+            epoch: 7,
+            sessionID: UUID(
+                uuidString: "77777777-7777-4777-8777-777777777777"
+            )!
+        )
+    }
+
+    private static let testUserID =
+        "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
 
     private static var apiEncoder: JSONEncoder {
         let encoder = JSONEncoder()
@@ -439,7 +504,8 @@ private actor TripMutationCredentialStore: CredentialStoring {
         accessToken: "access-token",
         refreshToken: "refresh-token",
         tokenType: "Bearer",
-        expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
+        expiresAt: Date(timeIntervalSince1970: 4_000_000_000),
+        userID: "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
     )
 
     func loadCredentials() -> AuthCredentials? { credentials }
@@ -448,6 +514,27 @@ private actor TripMutationCredentialStore: CredentialStoring {
     }
     func clearCredentials() {}
     func installationIdentifier() -> String { "installation-id" }
+}
+
+@MainActor
+private final class TripMutationSurfaceCoordinator: PrivateSurfaceCoordinating {
+    private(set) var activeSession: PrivatePresentationSession?
+
+    init(activeSession: PrivatePresentationSession?) {
+        self.activeSession = activeSession
+    }
+
+    func establish(session: PrivatePresentationSession) async throws {
+        activeSession = session
+    }
+
+    func tearDown() async throws {
+        activeSession = nil
+    }
+
+    func isCurrent(_ session: PrivatePresentationSession) -> Bool {
+        activeSession == session
+    }
 }
 
 private final class TripMutationURLProtocolStub: URLProtocol {

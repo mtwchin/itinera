@@ -8,22 +8,31 @@ final class PendingJobStoreTests: XCTestCase {
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let fileURL = root.appending(path: "pending-jobs.json")
         defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try PrivateStorageTestContext()
 
-        let firstStore = PendingJobStore(fileURL: fileURL)
+        let firstStore = storage.pendingJobStore(fileURL: fileURL)
         _ = try await firstStore.add(
             jobID: "job-123",
             title: "Lisbon, Portugal",
-            createdAt: Date(timeIntervalSince1970: 100)
+            createdAt: Date(timeIntervalSince1970: 100),
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
         )
 
-        let reloadedStore = PendingJobStore(fileURL: fileURL)
+        let reloadedStore = storage.pendingJobStore(fileURL: fileURL)
         let reloaded = try await reloadedStore.all()
         XCTAssertEqual(reloaded.count, 1)
         XCTAssertEqual(reloaded.first?.jobID, "job-123")
         XCTAssertEqual(reloaded.first?.title, "Lisbon, Portugal")
 
-        _ = try await reloadedStore.remove(jobID: "job-123")
-        let afterRemoval = try await PendingJobStore(fileURL: fileURL).all()
+        _ = try await reloadedStore.remove(
+            jobID: "job-123",
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
+        let afterRemoval = try await storage.pendingJobStore(
+            fileURL: fileURL
+        ).all()
         XCTAssertTrue(afterRemoval.isEmpty)
     }
 
@@ -32,13 +41,22 @@ final class PendingJobStoreTests: XCTestCase {
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let fileURL = root.appending(path: "pending-jobs.json")
         defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try PrivateStorageTestContext()
 
-        let store = PendingJobStore(fileURL: fileURL)
-        _ = try await store.add(jobID: "job-123", title: nil, createdAt: Date(timeIntervalSince1970: 100))
+        let store = storage.pendingJobStore(fileURL: fileURL)
+        _ = try await store.add(
+            jobID: "job-123",
+            title: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
         let records = try await store.add(
             jobID: "job-123",
             title: "Tokyo, Japan",
-            createdAt: Date(timeIntervalSince1970: 200)
+            createdAt: Date(timeIntervalSince1970: 200),
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
         )
 
         XCTAssertEqual(records.count, 1)
@@ -46,29 +64,64 @@ final class PendingJobStoreTests: XCTestCase {
         XCTAssertEqual(records.first?.title, "Tokyo, Japan")
     }
 
+    func testRemoveAllDeletesPendingJobsFileAndClearsActorCache() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let fileURL = root.appending(path: "pending-jobs.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try PrivateStorageTestContext()
+        let store = storage.pendingJobStore(fileURL: fileURL)
+        _ = try await store.add(
+            jobID: "job-123",
+            title: "Lisbon",
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
+
+        try await store.removeAll(
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        let records = try await store.all()
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testPendingSubmissionPersistsAndReusesIdempotencyKeyForSameBody() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let fileURL = root.appending(path: "pending-submissions.json")
         defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try PrivateStorageTestContext()
 
-        let firstStore = PendingSubmissionStore(fileURL: fileURL)
+        let firstStore = storage.pendingSubmissionStore(fileURL: fileURL)
         let first = try await firstStore.record(
             for: sampleRequest,
             title: "Lisbon, Portugal",
-            createdAt: Date(timeIntervalSince1970: 100)
+            createdAt: Date(timeIntervalSince1970: 100),
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
         )
         let second = try await firstStore.record(
             for: sampleRequest,
             title: "Lisbon, Portugal",
-            createdAt: Date(timeIntervalSince1970: 200)
+            createdAt: Date(timeIntervalSince1970: 200),
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
         )
 
         XCTAssertEqual(first.idempotencyKey, second.idempotencyKey)
-        let reloaded = try await PendingSubmissionStore(fileURL: fileURL).all()
+        let reloaded = try await storage.pendingSubmissionStore(
+            fileURL: fileURL
+        ).all()
         XCTAssertEqual(reloaded, [first])
 
-        try await firstStore.remove(idempotencyKey: first.idempotencyKey)
+        try await firstStore.remove(
+            idempotencyKey: first.idempotencyKey,
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
         let remaining = try await firstStore.all()
         XCTAssertTrue(remaining.isEmpty)
     }
@@ -78,6 +131,7 @@ final class PendingJobStoreTests: XCTestCase {
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let fileURL = root.appending(path: "pending-submissions.json")
         defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try PrivateStorageTestContext()
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: true
@@ -110,7 +164,7 @@ final class PendingJobStoreTests: XCTestCase {
             """.utf8
         ).write(to: fileURL, options: [.atomic])
 
-        let store = PendingSubmissionStore(fileURL: fileURL)
+        let store = storage.pendingSubmissionStore(fileURL: fileURL)
         let legacyRecords = try await store.all()
         let record = try XCTUnwrap(legacyRecords.first)
 
@@ -126,7 +180,10 @@ final class PendingJobStoreTests: XCTestCase {
         XCTAssertTrue(record.request.unavailableTimes.isEmpty)
         XCTAssertNil(record.request.timezone)
 
-        try await store.removeAll()
+        try await store.removeAll(
+            lease: storage.lease,
+            serverOperationLease: storage.serverOperationLease
+        )
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
         let recordsAfterRemoval = try await store.all()
         XCTAssertTrue(recordsAfterRemoval.isEmpty)

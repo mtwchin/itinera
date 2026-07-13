@@ -10,28 +10,29 @@ struct PendingJobRecord: Codable, Hashable, Identifiable, Sendable {
 
 actor PendingJobStore {
     private let fileURL: URL
-    private let fileManager = FileManager.default
+    private let boundLease: IdentityLease
+    private let identityCoordinator: IdentityCoordinator
+    private let beforeCommit: PrincipalStorageBeforeCommit?
+    private var fileManager: FileManager { .default }
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedRecords: [PendingJobRecord]?
 
-    init(fileURL: URL) {
+    init(
+        fileURL: URL,
+        lease: IdentityLease,
+        identityCoordinator: IdentityCoordinator,
+        beforeCommit: PrincipalStorageBeforeCommit? = nil
+    ) {
         self.fileURL = fileURL
+        boundLease = lease
+        self.identityCoordinator = identityCoordinator
+        self.beforeCommit = beforeCommit
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-    }
-
-    static func live() -> PendingJobStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return PendingJobStore(
-            fileURL: root
-                .appending(path: "Itinera", directoryHint: .isDirectory)
-                .appending(path: "pending-jobs.json")
-        )
     }
 
     func all() throws -> [PendingJobRecord] {
@@ -47,7 +48,14 @@ actor PendingJobStore {
     }
 
     @discardableResult
-    func add(jobID: String, title: String?, createdAt: Date = Date()) throws -> [PendingJobRecord] {
+    func add(
+        jobID: String,
+        title: String?,
+        createdAt: Date = Date(),
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws -> [PendingJobRecord] {
+        try await validateMutation(lease, serverOperationLease)
         var records = try all()
         if let index = records.firstIndex(where: { $0.jobID == jobID }) {
             let existing = records[index]
@@ -59,33 +67,87 @@ actor PendingJobStore {
         } else {
             records.append(PendingJobRecord(jobID: jobID, title: title, createdAt: createdAt))
         }
-        return try persist(records)
-    }
-
-    @discardableResult
-    func remove(jobID: String) throws -> [PendingJobRecord] {
-        let records = try all().filter { $0.jobID != jobID }
-        return try persist(records)
-    }
-
-    @discardableResult
-    func replace(with records: [PendingJobRecord]) throws -> [PendingJobRecord] {
-        try persist(records)
-    }
-
-    private func persist(_ records: [PendingJobRecord]) throws -> [PendingJobRecord] {
-        let sorted = records.sorted { $0.createdAt > $1.createdAt }
-        let directory = fileURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try encoder.encode(sorted).write(to: fileURL, options: [.atomic])
-        #if os(iOS)
-        try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: fileURL.path
+        return try await persist(
+            records,
+            lease: lease,
+            serverOperationLease: serverOperationLease
         )
-        #endif
+    }
+
+    @discardableResult
+    func remove(
+        jobID: String,
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws -> [PendingJobRecord] {
+        try await validateMutation(lease, serverOperationLease)
+        let records = try all().filter { $0.jobID != jobID }
+        return try await persist(
+            records,
+            lease: lease,
+            serverOperationLease: serverOperationLease
+        )
+    }
+
+    @discardableResult
+    func replace(
+        with records: [PendingJobRecord],
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws -> [PendingJobRecord] {
+        try await validateMutation(lease, serverOperationLease)
+        return try await persist(
+            records,
+            lease: lease,
+            serverOperationLease: serverOperationLease
+        )
+    }
+
+    func removeAll(
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        try await validateMutation(lease, serverOperationLease)
+        let fileCommit = PrivateStorageFileCommit.remove(fileURL)
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(
+            ifServerOperationCurrent: serverOperationLease
+        ) {
+            try fileCommit.perform()
+        }
+        cachedRecords = []
+    }
+
+    private func persist(
+        _ records: [PendingJobRecord],
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws -> [PendingJobRecord] {
+        let sorted = records.sorted { $0.createdAt > $1.createdAt }
+        let encoded = try encoder.encode(sorted)
+        let fileCommit = PrivateStorageFileCommit.replaceProtected(
+            data: encoded,
+            fileURL: fileURL
+        )
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(
+            ifServerOperationCurrent: serverOperationLease
+        ) {
+            try fileCommit.perform()
+        }
         cachedRecords = sorted
         return sorted
+    }
+
+    private func validateMutation(
+        _ lease: IdentityLease,
+        _ serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        guard lease == boundLease,
+              serverOperationLease.identityLease == lease else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
+        try await identityCoordinator.validate(serverOperationLease)
     }
 }
 
@@ -100,28 +162,29 @@ struct PendingSubmissionRecord: Codable, Equatable, Identifiable, Sendable {
 
 actor PendingSubmissionStore {
     private let fileURL: URL
-    private let fileManager = FileManager.default
+    private let boundLease: IdentityLease
+    private let identityCoordinator: IdentityCoordinator
+    private let beforeCommit: PrincipalStorageBeforeCommit?
+    private var fileManager: FileManager { .default }
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedRecords: [PendingSubmissionRecord]?
 
-    init(fileURL: URL) {
+    init(
+        fileURL: URL,
+        lease: IdentityLease,
+        identityCoordinator: IdentityCoordinator,
+        beforeCommit: PrincipalStorageBeforeCommit? = nil
+    ) {
         self.fileURL = fileURL
+        boundLease = lease
+        self.identityCoordinator = identityCoordinator
+        self.beforeCommit = beforeCommit
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-    }
-
-    static func live() -> PendingSubmissionStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return PendingSubmissionStore(
-            fileURL: root
-                .appending(path: "Itinera", directoryHint: .isDirectory)
-                .appending(path: "pending-submissions.json")
-        )
     }
 
     func all() throws -> [PendingSubmissionRecord] {
@@ -141,8 +204,11 @@ actor PendingSubmissionStore {
     func record(
         for request: GenerateItineraryRequest,
         title: String,
-        createdAt: Date = Date()
-    ) throws -> PendingSubmissionRecord {
+        createdAt: Date = Date(),
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws -> PendingSubmissionRecord {
+        try await validateMutation(lease, serverOperationLease)
         var records = try all()
         if let existing = records.first(where: { $0.request == request }) {
             return existing
@@ -154,31 +220,70 @@ actor PendingSubmissionStore {
             createdAt: createdAt
         )
         records.append(record)
-        try persist(records)
+        try await persist(
+            records,
+            lease: lease,
+            serverOperationLease: serverOperationLease
+        )
         return record
     }
 
-    func remove(idempotencyKey: UUID) throws {
-        try persist(try all().filter { $0.idempotencyKey != idempotencyKey })
-    }
-
-    func removeAll() throws {
-        cachedRecords = []
-        guard fileManager.fileExists(atPath: fileURL.path) else { return }
-        try fileManager.removeItem(at: fileURL)
-    }
-
-    private func persist(_ records: [PendingSubmissionRecord]) throws {
-        let sorted = records.sorted { $0.createdAt > $1.createdAt }
-        let directory = fileURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try encoder.encode(sorted).write(to: fileURL, options: [.atomic])
-        #if os(iOS)
-        try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: fileURL.path
+    func remove(
+        idempotencyKey: UUID,
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        try await validateMutation(lease, serverOperationLease)
+        try await persist(
+            try all().filter { $0.idempotencyKey != idempotencyKey },
+            lease: lease,
+            serverOperationLease: serverOperationLease
         )
-        #endif
+    }
+
+    func removeAll(
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        try await validateMutation(lease, serverOperationLease)
+        let fileCommit = PrivateStorageFileCommit.remove(fileURL)
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(
+            ifServerOperationCurrent: serverOperationLease
+        ) {
+            try fileCommit.perform()
+        }
+        cachedRecords = []
+    }
+
+    private func persist(
+        _ records: [PendingSubmissionRecord],
+        lease: IdentityLease,
+        serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        let sorted = records.sorted { $0.createdAt > $1.createdAt }
+        let encoded = try encoder.encode(sorted)
+        let fileCommit = PrivateStorageFileCommit.replaceProtected(
+            data: encoded,
+            fileURL: fileURL
+        )
+        if let beforeCommit { await beforeCommit(lease) }
+        try await identityCoordinator.commit(
+            ifServerOperationCurrent: serverOperationLease
+        ) {
+            try fileCommit.perform()
+        }
         cachedRecords = sorted
+    }
+
+    private func validateMutation(
+        _ lease: IdentityLease,
+        _ serverOperationLease: PrivateServerOperationLease
+    ) async throws {
+        guard lease == boundLease,
+              serverOperationLease.identityLease == lease else {
+            throw IdentityCoordinatorError.staleIdentity
+        }
+        try await identityCoordinator.validate(serverOperationLease)
     }
 }

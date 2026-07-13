@@ -1,12 +1,56 @@
 import AuthenticationServices
 import SwiftUI
 
+enum SettingsPrivacyCopy {
+    static let appleRecovery = "Linking Apple provides a future sign-in method. If you approve sharing an email or private relay address, Itinera may store it on this server account. Linking does not enable cloud sync or upload offline trip copies to iCloud. If Apple already has a separate library, switching opens it and does not delete the current server account or its separate library. Itinera never merges them."
+
+    static let appleConflict = "Apple is already linked to a separate Itinera library. Switching opens that Apple library; trips, drafts, progress, and offline copies are not merged or cloud-synced. The current server account and its separate library are not deleted."
+
+    static let deleteRowTitle = "Delete your Itinera account and app data"
+    static let deleteRowDetail = "Delete this server account and app data; Calendar events, exported PDFs, files or text, and prior shares remain"
+    static let deleteUnavailableDetail = "Requires the server deletion endpoint; Calendar events, exported PDFs/files/text, and prior shares remain"
+    static let deleteRecoveryRequiredDetail = "Restore this same server session before deleting the account"
+    static let deleteConfirmationTitle = "Delete your Itinera account and app data?"
+    static let deleteConfirmationMessage = "This permanently deletes this Itinera server account and its trips, then removes this account's private app data from this iPhone. Calendar events, exported PDFs, files or text, and anything previously shared remain outside the app. If interrupted, Itinera hides the library and resumes this same deletion. This cannot be undone."
+}
+
+enum SettingsBusyOperation: Equatable, Sendable {
+    case linkingApple
+    case switchingAppleLibrary
+    case retryingServerSession
+    case clearingDownloads
+    case signingOut
+    case deletingData
+
+    var title: String {
+        switch self {
+        case .linkingApple:
+            return "Linking this library to Apple"
+        case .switchingAppleLibrary:
+            return "Switching private libraries"
+        case .retryingServerSession:
+            return "Retrying this server session"
+        case .clearingDownloads:
+            return "Clearing downloaded trips"
+        case .signingOut:
+            return "Signing out on this iPhone"
+        case .deletingData:
+            return "Deleting your Itinera account and app data"
+        }
+    }
+}
+
 struct SettingsActions: Sendable {
+    var serverSessionNeedsRecovery = false
+    var retryServerSession: (@MainActor @Sendable () async throws -> Void)?
     var clearLocalTripData: (@MainActor @Sendable () async throws -> Void)?
+    var signOut: (@MainActor @Sendable () async throws -> Void)?
     var deleteMyData: (@MainActor @Sendable () async throws -> Void)?
     var privacyPolicyURL: URL?
     var supportURL: URL?
-    var connectAppleAccount: (@MainActor @Sendable (String) async throws -> Void)?
+    var validatePrivateSession: (@MainActor @Sendable () async -> Bool)?
+    var connectAppleAccount: (@MainActor @Sendable (String) async throws -> AppleLinkResult)?
+    var switchToAppleAccount: (@MainActor @Sendable (String) async throws -> Void)?
 
     static let placeholders = SettingsActions()
 }
@@ -14,6 +58,7 @@ struct SettingsActions: Sendable {
 struct SettingsView: View {
     private enum PendingConfirmation: Identifiable {
         case clearLocalData
+        case signOut
         case deleteAllData
 
         var id: Self { self }
@@ -23,11 +68,14 @@ struct SettingsView: View {
     @Environment(\.itineraTheme) private var theme
     @StateObject private var preferences: SettingsPreferences
     @State private var pendingConfirmation: PendingConfirmation?
-    @State private var isWorking = false
+    @State private var busyOperation: SettingsBusyOperation?
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var showingDisclosure = false
     @State private var appleAccountStatus: String?
+    @State private var pendingAppleSwitchToken: String?
+    @AccessibilityFocusState private var busyStatusIsFocused: Bool
+    @AccessibilityFocusState private var errorStatusIsFocused: Bool
 
     private let actions: SettingsActions
     private let showsDoneButton: Bool
@@ -35,11 +83,19 @@ struct SettingsView: View {
     init(
         preferences: SettingsPreferences? = nil,
         actions: SettingsActions = .placeholders,
-        showsDoneButton: Bool = true
+        showsDoneButton: Bool = true,
+        initialBusyOperation: SettingsBusyOperation? = nil,
+        initialAppleSwitchToken: String? = nil
     ) {
         _preferences = StateObject(wrappedValue: preferences ?? SettingsPreferences())
+        _busyOperation = State(initialValue: initialBusyOperation)
+        _pendingAppleSwitchToken = State(initialValue: initialAppleSwitchToken)
         self.actions = actions
         self.showsDoneButton = showsDoneButton
+    }
+
+    private var isWorking: Bool {
+        busyOperation != nil
     }
 
     var body: some View {
@@ -59,6 +115,13 @@ struct SettingsView: View {
                     }
                     if let errorMessage {
                         ItineraStatusBanner(message: errorMessage, kind: .error)
+                            .accessibilityFocused($errorStatusIsFocused)
+                    }
+                    if actions.serverSessionNeedsRecovery {
+                        ItineraStatusBanner(
+                            message: "This library is available offline, but server changes are paused. Retry the same session or sign out to start a separate guest library.",
+                            kind: .warning
+                        )
                     }
 
                     appearanceSection
@@ -73,6 +136,55 @@ struct SettingsView: View {
                 .padding(.vertical, 18)
             }
             .disabled(isWorking)
+            .accessibilityHidden(isWorking)
+
+            if let busyOperation {
+                Color.black.opacity(0.12)
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(theme.route)
+                        .accessibilityHidden(true)
+                    Text(busyOperation.title)
+                        .font(.headline)
+                        .foregroundStyle(theme.primaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 26)
+                .padding(.vertical, 22)
+                .frame(maxWidth: 300)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(theme.border, lineWidth: 1)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(busyOperation.title)
+                .accessibilityValue("In progress")
+                .accessibilityAddTraits(.updatesFrequently)
+                .accessibilityFocused($busyStatusIsFocused)
+            }
+        }
+        .onChange(of: busyOperation) { _, operation in
+            busyStatusIsFocused = operation != nil
+            if operation != nil {
+                errorStatusIsFocused = false
+            } else if errorMessage != nil {
+                errorStatusIsFocused = true
+            }
+        }
+        .onChange(of: errorMessage) { _, message in
+            guard message != nil, busyOperation == nil else { return }
+            errorStatusIsFocused = true
+        }
+        .onAppear {
+            if busyOperation != nil {
+                busyStatusIsFocused = true
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -112,6 +224,30 @@ struct SettingsView: View {
         } message: {
             Text(confirmationMessage)
         }
+        .confirmationDialog(
+            "Switch private libraries?",
+            isPresented: Binding(
+                get: { pendingAppleSwitchToken != nil },
+                set: {
+                    if !$0 {
+                        pendingAppleSwitchToken = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Switch to Apple Library", role: .destructive) {
+                guard let token = pendingAppleSwitchToken else { return }
+                pendingAppleSwitchToken = nil
+                Task { await performAppleSwitch(identityToken: token) }
+            }
+            Button("Keep Current Library", role: .cancel) {
+                pendingAppleSwitchToken = nil
+                appleAccountStatus = "Kept the current private library. Nothing was merged or replaced."
+            }
+        } message: {
+            Text(SettingsPrivacyCopy.appleConflict)
+        }
     }
 
     private var appearanceSection: some View {
@@ -124,6 +260,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .frame(minHeight: 44)
                 .accessibilityHint("Controls the color appearance throughout Itinera")
 
                 Label(
@@ -209,7 +346,7 @@ struct SettingsView: View {
             title: "Account recovery",
             systemImage: "person.crop.circle.badge.checkmark"
         ) {
-            Text("Sign in with Apple to recover this library on another iPhone. If an existing Apple library is found, Itinera switches to it without deleting this device's offline copy.")
+            Text(SettingsPrivacyCopy.appleRecovery)
                 .font(.caption)
                 .foregroundStyle(theme.secondaryText)
 
@@ -217,6 +354,23 @@ struct SettingsView: View {
                 Text(appleAccountStatus)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(theme.success)
+            }
+
+            if actions.serverSessionNeedsRecovery {
+                Button {
+                    Task { await retryServerSession() }
+                } label: {
+                    settingsRow(
+                        title: "Retry this server session",
+                        detail: "Keep the same private library and try its saved credentials again",
+                        systemImage: "arrow.clockwise.circle.fill",
+                        tint: theme.route
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(actions.retryServerSession == nil)
+
+                Divider()
             }
 
             SignInWithAppleButton(.continue) { request in
@@ -227,8 +381,14 @@ struct SettingsView: View {
             .signInWithAppleButtonStyle(.black)
             .frame(height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .disabled(actions.connectAppleAccount == nil)
-            .opacity(actions.connectAppleAccount == nil ? 0.55 : 1)
+            .disabled(
+                actions.connectAppleAccount == nil
+                    || actions.switchToAppleAccount == nil
+            )
+            .opacity(
+                actions.connectAppleAccount == nil
+                    || actions.switchToAppleAccount == nil ? 0.55 : 1
+            )
         }
     }
 
@@ -252,20 +412,46 @@ struct SettingsView: View {
             Divider()
 
             Button {
+                pendingConfirmation = .signOut
+            } label: {
+                settingsRow(
+                    title: "Sign out on this iPhone",
+                    detail: actions.signOut == nil
+                        ? "Available when private identity is connected"
+                        : "Remove this library's device data and start a new guest library",
+                    systemImage: "rectangle.portrait.and.arrow.right",
+                    tint: theme.warning
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(actions.signOut == nil)
+
+            Divider()
+
+            Button {
                 pendingConfirmation = .deleteAllData
             } label: {
                 settingsRow(
-                    title: "Delete my data",
-                    detail: actions.deleteMyData == nil
-                        ? "Requires the server deletion endpoint"
-                        : "Permanently delete server and local data",
+                    title: SettingsPrivacyCopy.deleteRowTitle,
+                    detail: actions.serverSessionNeedsRecovery
+                        ? SettingsPrivacyCopy.deleteRecoveryRequiredDetail
+                        : actions.deleteMyData == nil
+                        ? SettingsPrivacyCopy.deleteUnavailableDetail
+                        : SettingsPrivacyCopy.deleteRowDetail,
                     systemImage: "trash.fill",
                     tint: theme.danger
                 )
             }
             .buttonStyle(.plain)
-            .disabled(actions.deleteMyData == nil)
-            .accessibilityHint("This action cannot be undone")
+            .disabled(
+                actions.deleteMyData == nil
+                    || actions.serverSessionNeedsRecovery
+            )
+            .accessibilityHint(
+                actions.serverSessionNeedsRecovery
+                    ? SettingsPrivacyCopy.deleteRecoveryRequiredDetail
+                    : "This action cannot be undone"
+            )
         }
     }
 
@@ -343,6 +529,7 @@ struct SettingsView: View {
             }
         }
         .contentShape(Rectangle())
+        .frame(minHeight: 44, alignment: .leading)
     }
 
     @ViewBuilder
@@ -402,11 +589,27 @@ struct SettingsView: View {
                 )
             }
             Task {
+                busyOperation = .linkingApple
+                defer { busyOperation = nil }
                 do {
-                    try await connectAppleAccount(token)
-                    appleAccountStatus = "Your library is connected to Apple."
-                    errorMessage = nil
+                    let linkResult = try await connectAppleAccount(token)
+                    if let validatePrivateSession = actions.validatePrivateSession,
+                       !(await validatePrivateSession()) {
+                        throw IdentityCoordinatorError.staleIdentity
+                    }
+                    switch linkResult {
+                    case .linked:
+                        appleAccountStatus = nil
+                        errorMessage = nil
+                    case .switchConfirmationRequired:
+                        appleAccountStatus = nil
+                        pendingAppleSwitchToken = token
+                    }
                 } catch {
+                    if let validatePrivateSession = actions.validatePrivateSession,
+                       !(await validatePrivateSession()) {
+                        return
+                    }
                     errorMessage = error.localizedDescription
                 }
             }
@@ -415,27 +618,76 @@ struct SettingsView: View {
         }
     }
 
+    private func performAppleSwitch(identityToken: String) async {
+        guard let switchToAppleAccount = actions.switchToAppleAccount else {
+            return
+        }
+        busyOperation = .switchingAppleLibrary
+        statusMessage = nil
+        errorMessage = nil
+        defer { busyOperation = nil }
+        do {
+            try await switchToAppleAccount(identityToken)
+        } catch {
+            if let validatePrivateSession = actions.validatePrivateSession,
+               !(await validatePrivateSession()) {
+                return
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func retryServerSession() async {
+        guard let retryServerSession = actions.retryServerSession else {
+            return
+        }
+        busyOperation = .retryingServerSession
+        statusMessage = nil
+        errorMessage = nil
+        defer { busyOperation = nil }
+        do {
+            try await retryServerSession()
+        } catch {
+            if let validatePrivateSession = actions.validatePrivateSession,
+               !(await validatePrivateSession()) {
+                return
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func perform(_ confirmation: PendingConfirmation) async {
         pendingConfirmation = nil
         statusMessage = nil
         errorMessage = nil
-        isWorking = true
-        defer { isWorking = false }
+        busyOperation = {
+            switch confirmation {
+            case .clearLocalData: return .clearingDownloads
+            case .signOut: return .signingOut
+            case .deleteAllData: return .deletingData
+            }
+        }()
+        defer { busyOperation = nil }
 
         do {
             switch confirmation {
             case .clearLocalData:
                 guard let clearLocalTripData = actions.clearLocalTripData else { return }
                 try await clearLocalTripData()
-                statusMessage = "Downloaded trips were removed from this iPhone."
+            case .signOut:
+                guard let signOut = actions.signOut else { return }
+                try await signOut()
             case .deleteAllData:
                 guard let deleteMyData = actions.deleteMyData else { return }
                 try await deleteMyData()
                 preferences.reset()
                 await GenerationNotificationManager.shared.removeAllItineraNotifications()
-                statusMessage = "Your Itinera data was deleted."
             }
         } catch {
+            if let validatePrivateSession = actions.validatePrivateSession,
+               !(await validatePrivateSession()) {
+                return
+            }
             errorMessage = error.localizedDescription
         }
     }
@@ -443,7 +695,8 @@ struct SettingsView: View {
     private var confirmationTitle: String {
         switch pendingConfirmation {
         case .clearLocalData: return "Clear downloaded trips?"
-        case .deleteAllData: return "Delete all your data?"
+        case .signOut: return "Sign out on this iPhone?"
+        case .deleteAllData: return SettingsPrivacyCopy.deleteConfirmationTitle
         case nil: return "Confirm"
         }
     }
@@ -451,7 +704,8 @@ struct SettingsView: View {
     private var confirmationButtonTitle: String {
         switch pendingConfirmation {
         case .clearLocalData: return "Clear Downloads"
-        case .deleteAllData: return "Delete My Data"
+        case .signOut: return "Sign Out"
+        case .deleteAllData: return "Delete Account and App Data"
         case nil: return "Continue"
         }
     }
@@ -460,8 +714,10 @@ struct SettingsView: View {
         switch pendingConfirmation {
         case .clearLocalData:
             return "Server copies remain available and can be downloaded again."
+        case .signOut:
+            return "This removes this library's downloaded trips, drafts, progress, pending work, notifications, widget, and device session. Server data remains. Itinera then starts a separate guest library."
         case .deleteAllData:
-            return "This permanently removes your server data, downloaded trips, and device session. This cannot be undone."
+            return SettingsPrivacyCopy.deleteConfirmationMessage
         case nil:
             return ""
         }
@@ -577,4 +833,24 @@ private struct ItineraDisclosureLabelStyle: LabelStyle {
         SettingsView()
     }
     .environment(\.itineraTheme, ItineraTheme.atlas)
+}
+
+#Preview("Settings · Deleting") {
+    NavigationStack {
+        SettingsView(initialBusyOperation: .deletingData)
+    }
+    .environment(\.itineraTheme, .atlas)
+    .preferredColorScheme(.light)
+}
+
+#Preview(
+    "Settings · Apple conflict · Compact accessibility",
+    traits: .fixedLayout(width: 320, height: 760)
+) {
+    NavigationStack {
+        SettingsView(initialAppleSwitchToken: "preview-ephemeral-token")
+    }
+    .environment(\.itineraTheme, .atlas)
+    .environment(\.dynamicTypeSize, .accessibility2)
+    .preferredColorScheme(.light)
 }

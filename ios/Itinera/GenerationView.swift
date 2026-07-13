@@ -8,6 +8,7 @@ struct GenerationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.itineraTheme) private var theme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.privateAppSession) private var privateAppSession
 
     let jobID: String
 
@@ -32,37 +33,65 @@ struct GenerationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .task(id: pollAttempt) {
-            await appState.registerPending(jobID: jobID)
+            guard let privateAppSession,
+                  await appState.isCurrent(privateAppSession) else {
+                return
+            }
+            let presentationSession = privateAppSession.presentationSession
+            await appState.registerPending(
+                jobID: jobID,
+                session: privateAppSession
+            )
+            guard await appState.isCurrent(privateAppSession) else { return }
             let tripTitle = appState.pendingJobs.first { $0.jobID == jobID }?.title
             do {
-                itinerary = try await appState.apiClient.awaitItinerary(jobID)
-                if let itinerary {
-                    await appState.cacheCompletedTrip(
-                        jobID: jobID,
-                        itinerary: itinerary
-                    )
+                let scopedItinerary = try await appState.scopedAPIValue(
+                    session: privateAppSession
+                ) { client in
+                    try await client.awaitItinerary(jobID)
                 }
-                await appState.resolvePending(jobID: jobID)
+                guard await appState.consume(
+                    scopedItinerary,
+                    perform: { itinerary = $0 }
+                ) else { return }
+                await appState.cacheCompletedTrip(
+                    jobID: jobID,
+                    itinerary: scopedItinerary.value,
+                    session: privateAppSession
+                )
+                await appState.resolvePending(
+                    jobID: jobID,
+                    session: privateAppSession
+                )
                 if settingsPreferences.generationNotificationsEnabled,
-                   scenePhase != .active {
+                   scenePhase != .active,
+                   await appState.isCurrent(privateAppSession) {
                     try? await GenerationNotificationManager.shared.notifyTripReady(
                         jobID: jobID,
-                        title: tripTitle
+                        title: tripTitle,
+                        expectedSession: presentationSession
                     )
                 }
             } catch is CancellationError {
                 return
             } catch let error as APIError where error.shouldRemovePendingJob {
-                await appState.resolvePending(jobID: jobID)
+                await appState.resolvePending(
+                    jobID: jobID,
+                    session: privateAppSession
+                )
+                guard await appState.isCurrent(privateAppSession) else { return }
                 isTerminalFailure = true
                 errorMessage = error.localizedDescription
                 if settingsPreferences.generationNotificationsEnabled,
-                   scenePhase != .active {
+                   scenePhase != .active,
+                   await appState.isCurrent(privateAppSession) {
                     try? await GenerationNotificationManager.shared.notifyGenerationFailed(
-                        jobID: jobID
+                        jobID: jobID,
+                        expectedSession: presentationSession
                     )
                 }
             } catch {
+                guard await appState.isCurrent(privateAppSession) else { return }
                 errorMessage = error.localizedDescription
             }
         }

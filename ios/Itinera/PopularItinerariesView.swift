@@ -3,6 +3,7 @@ import SwiftUI
 struct PopularItinerariesView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     @State private var itineraries: [PopularItinerarySummary] = []
     @State private var searchText = ""
@@ -141,14 +142,23 @@ struct PopularItinerariesView: View {
     }
 
     private func load() async {
+        guard let privateAppSession else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            itineraries = try await appState.apiClient.popularItineraries()
-            errorMessage = nil
+            let scopedItineraries = try await appState.scopedAPIValue(
+                session: privateAppSession
+            ) { client in
+                try await client.popularItineraries()
+            }
+            _ = await appState.consume(scopedItineraries) { loaded in
+                itineraries = loaded
+                errorMessage = nil
+            }
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -230,6 +240,7 @@ private struct PopularItineraryCard: View {
 private struct PopularItineraryDetailView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.privateAppSession) private var privateAppSession
 
     let summary: PopularItinerarySummary
     let onSaved: (String, Bool) -> Void
@@ -318,33 +329,50 @@ private struct PopularItineraryDetailView: View {
     }
 
     private func load() async {
+        guard let privateAppSession else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            let loaded = try await appState.apiClient.popularItinerary(summary.id)
-            detail = loaded
-            isSaved = loaded.isSaved
-            errorMessage = nil
+            let itineraryID = summary.id
+            let scopedDetail = try await appState.scopedAPIValue(
+                session: privateAppSession
+            ) { client in
+                try await client.popularItinerary(itineraryID)
+            }
+            _ = await appState.consume(scopedDetail) { loaded in
+                detail = loaded
+                isSaved = loaded.isSaved
+                errorMessage = nil
+            }
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func save() async {
-        guard !isSaving, !isSaved else { return }
+        guard !isSaving, !isSaved, let privateAppSession else { return }
         isSaving = true
         defer { isSaving = false }
         do {
-            let response = try await appState.apiClient.savePopularItinerary(summary.id)
-            isSaved = true
-            errorMessage = nil
-            onSaved(summary.id, response.created)
-            appState.markLibraryChanged()
+            let itineraryID = summary.id
+            let scopedResponse = try await appState.scopedAPIValue(
+                session: privateAppSession
+            ) { client in
+                try await client.savePopularItinerary(itineraryID)
+            }
+            _ = await appState.consume(scopedResponse) { response in
+                isSaved = true
+                errorMessage = nil
+                onSaved(itineraryID, response.created)
+                appState.markLibraryChanged(session: privateAppSession)
+            }
         } catch is CancellationError {
             return
         } catch {
+            guard await appState.isCurrent(privateAppSession) else { return }
             errorMessage = error.localizedDescription
         }
     }
