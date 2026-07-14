@@ -39,6 +39,10 @@
 	<string>Itinera adds itinerary stops to your calendar only when you ask it to.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>comgooglemaps</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

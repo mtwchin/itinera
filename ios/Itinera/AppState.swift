@@ -146,6 +146,32 @@ final class AppState: ObservableObject {
         return response
     }
 
+    @discardableResult
+    func aiEditTrip(
+        jobID: String,
+        message: String,
+        day: Int?,
+        expectedVersion: Int
+    ) async throws -> ItineraryRevisionResponse {
+        let response = try await apiClient.aiEditTrip(
+            jobID,
+            message: message,
+            day: day,
+            expectedVersion: expectedVersion
+        )
+        var trip = await fallbackCompletedTrip(jobID: jobID, itinerary: response.result)
+        trip.status = .succeeded
+        trip.result = response.result
+        trip.error = nil
+        trip.version = response.toVersion
+        await persistCompletedTrip(
+            trip,
+            failureMessage: "The AI edit was saved, but its offline copy could not be updated."
+        )
+        markLibraryChanged()
+        return response
+    }
+
     private func fallbackCompletedTrip(
         jobID: String,
         itinerary: Itinerary

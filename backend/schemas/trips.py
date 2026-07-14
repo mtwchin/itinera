@@ -84,6 +84,12 @@ class ItineraryRevisionCreate(BaseModel):
     operations: list[RevisionOperation] = Field(min_length=1, max_length=25)
 
 
+class AIEditRequest(BaseModel):
+    message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+    expected_version: int = Field(ge=1)
+    day: int | None = Field(default=None, ge=1, le=30)
+
+
 class ItineraryRevisionResponse(BaseModel):
     id: uuid.UUID
     job_id: str

@@ -19,6 +19,7 @@ from backend.db.repo import (
     delete_owned_itinerary,
     delete_trip_record,
     duplicate_owned_itinerary,
+    get_itinerary_with_access,
     list_itinerary_revisions,
     list_trip_records,
     remove_trip_collaborator,
@@ -30,6 +31,7 @@ from backend.db.repo import (
 from backend.db.session import get_session
 from backend.schemas.itinerary import SavedItinerary
 from backend.schemas.trips import (
+    AIEditRequest,
     ChecklistItemCreate,
     ChecklistItemResponse,
     ChecklistItemUpdate,
@@ -170,6 +172,94 @@ async def create_revision(
         ) from exc
     if revised is None:
         raise _not_found()
+    _, revision = revised
+    await session.commit()
+    return _revision_response(job_id, revision)
+
+
+@router.post(
+    "/itineraries/{job_id}/ai-edit",
+    response_model=ItineraryRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def ai_edit_trip(
+    job_id: str,
+    payload: AIEditRequest,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ItineraryRevisionResponse:
+    from backend.agents.editor import AIEditorError, apply_ai_edit
+    from backend.config import get_settings
+
+    import anthropic as _anthropic
+
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI editing requires an Anthropic API key to be configured.",
+        )
+
+    row = await get_itinerary_with_access(
+        session, job_id=job_id, user_id=user.id, require_edit=True
+    )
+    if row is None:
+        raise _not_found()
+    if row.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only completed itineraries can be edited.",
+        )
+
+    from backend.schemas.itinerary import Itinerary as ItinerarySchema
+
+    itinerary = ItinerarySchema.model_validate(row.result)
+
+    client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        operations = apply_ai_edit(
+            client,
+            settings.anthropic_model,
+            itinerary,
+            payload.message,
+            payload.day,
+        )
+    except AIEditorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if not operations:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The AI determined no changes were needed for that request.",
+        )
+
+    try:
+        revised = await revise_itinerary(
+            session,
+            job_id=job_id,
+            user_id=user.id,
+            expected_version=payload.expected_version,
+            operations=operations,
+        )
+    except ItineraryVersionConflictError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "current_version": exc.current_version},
+        ) from exc
+    except InvalidRevisionError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if revised is None:
+        raise _not_found()
+
     _, revision = revised
     await session.commit()
     return _revision_response(job_id, revision)
