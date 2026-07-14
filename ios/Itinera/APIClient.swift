@@ -209,6 +209,20 @@ actor APIClient {
         )
     }
 
+    func aiEditTrip(
+        _ jobID: String,
+        message: String,
+        day: Int?,
+        expectedVersion: Int
+    ) async throws -> ItineraryRevisionResponse {
+        try await send(
+            path: "/api/v1/itineraries/\(jobID)/ai-edit",
+            method: "POST",
+            body: encoder.encode(AIEditRequest(message: message, expectedVersion: expectedVersion, day: day)),
+            as: ItineraryRevisionResponse.self
+        )
+    }
+
     func revisionHistory(_ jobID: String) async throws -> [ItineraryRevisionResponse] {
         try await send(
             path: "/api/v1/itineraries/\(jobID)/revisions",

@@ -4,6 +4,7 @@ struct GoogleMapsRouteSegment: Equatable, Identifiable, Sendable {
     let index: Int
     let totalSegments: Int
     let url: URL
+    let appURL: URL?
     let activityNames: [String]
 
     var id: Int { index }
@@ -65,6 +66,7 @@ enum GoogleMapsURLBuilder {
                 index: offset + 1,
                 totalSegments: activitySegments.count,
                 url: try makeURL(for: segment),
+                appURL: makeAppURL(for: segment),
                 activityNames: segment.map(\.name)
             )
         }
@@ -112,6 +114,22 @@ enum GoogleMapsURLBuilder {
             throw GoogleMapsURLBuilderError.urlTooLong
         }
         return url
+    }
+
+    private static func makeAppURL(for activities: [Activity]) -> URL? {
+        if activities.count == 1, let activity = activities.first {
+            return URL(string: "comgooglemaps://?q=\(coordinateString(activity.coordinates))")
+        }
+        guard let origin = activities.first, let destination = activities.last else {
+            return nil
+        }
+        let waypoints = activities.dropFirst().dropLast()
+        var parts = ["saddr=\(coordinateString(origin.coordinates))"]
+        if !waypoints.isEmpty {
+            parts.append("waypoints=\(waypoints.map { coordinateString($0.coordinates) }.joined(separator: "|"))")
+        }
+        parts.append("daddr=\(coordinateString(destination.coordinates))")
+        return URL(string: "comgooglemaps://?\(parts.joined(separator: "&"))")
     }
 
     private static func isValid(_ coordinates: Coordinates) -> Bool {

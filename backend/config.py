@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,10 +34,24 @@ class Settings(BaseSettings):
             return value.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
     redis_url: str = Field(default="redis://localhost:6379/0")
+    redis_operation_timeout_seconds: float = Field(default=0.5, gt=0, le=5)
+    readiness_check_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
+    readiness_cache_ttl_seconds: float = Field(default=2.0, gt=0, le=30)
+    itinerary_stream_reconcile_seconds: float = Field(default=2.0, gt=0, le=30)
+    itinerary_stream_max_seconds: int = Field(default=5 * 60, ge=30, le=60 * 60)
+    itinerary_stream_database_timeout_seconds: float = Field(
+        default=3.0, gt=0, le=30
+    )
+    itinerary_stream_database_pool_size: int = Field(default=10, ge=1, le=100)
+    itinerary_stream_max_connections_per_principal: int = Field(
+        default=2, ge=1, le=20
+    )
+    itinerary_stream_lease_ttl_seconds: int = Field(default=30, ge=5, le=5 * 60)
+    itinerary_stream_lease_renew_seconds: int = Field(default=10, ge=1, le=2 * 60)
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
 
-    itinerary_composer_provider: Literal["ollama", "anthropic", "openai"] = "ollama"
+    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq"] = "ollama"
     ollama_base_url: str = "http://localhost:11434/api"
     ollama_model: str = "qwen2.5:7b-instruct"
     ollama_api_key: str | None = None
@@ -47,12 +61,27 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
     openai_request_timeout_seconds: int = Field(default=180, ge=1, le=600)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
-    rate_limit_generations_per_window: int = 10
-    rate_limit_window_seconds: int = 60 * 60
-    rate_limit_global_generations_per_window: int = 1_000
-    rate_limit_guest_sessions_per_window: int = 20
-    rate_limit_global_guest_sessions_per_window: int = 5_000
+    generation_admission_enabled: bool = True
+    generation_disabled_retry_after_seconds: int = Field(default=60, ge=1, le=3600)
+    admission_unavailable_retry_after_seconds: int = Field(default=5, ge=1, le=300)
+    rate_limit_generations_per_window: int = Field(
+        default=10, ge=1, le=1_000_000_000
+    )
+    rate_limit_window_seconds: int = Field(default=60 * 60, ge=1, le=7 * 24 * 60 * 60)
+    rate_limit_global_generations_per_window: int = Field(
+        default=1_000, ge=1, le=1_000_000_000
+    )
+    rate_limit_guest_sessions_per_window: int = Field(
+        default=20, ge=1, le=1_000_000_000
+    )
+    rate_limit_global_guest_sessions_per_window: int = Field(
+        default=5_000, ge=1, le=1_000_000_000
+    )
 
     # Guest sessions use short-lived signed access tokens and opaque, rotating
     # refresh tokens. Production must override the development signing secret.
@@ -95,6 +124,22 @@ class Settings(BaseSettings):
 
     cache_trending_ttl_seconds: int = 6 * 60 * 60
     cache_llm_ttl_seconds: int = 24 * 60 * 60
+
+    @model_validator(mode="after")
+    def _validate_stream_lease_timing(self) -> "Settings":
+        operation_budget = max(
+            self.redis_operation_timeout_seconds,
+            self.itinerary_stream_database_timeout_seconds,
+        )
+        if (
+            self.itinerary_stream_lease_renew_seconds + operation_budget
+            >= self.itinerary_stream_lease_ttl_seconds
+        ):
+            raise ValueError(
+                "ITINERARY_STREAM_LEASE_TTL_SECONDS must exceed the renewal "
+                "interval plus the longest bounded stream operation"
+            )
+        return self
 
 
 @lru_cache

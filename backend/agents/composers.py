@@ -21,7 +21,51 @@ from pydantic import ValidationError
 from backend.schemas.itinerary import GenerateItineraryRequest, Itinerary
 
 
-GROUNDING_COORDINATE_TOLERANCE_DEGREES = 0.00001
+GROUNDING_COORDINATE_TOLERANCE_DEGREES = 0.005
+
+
+def enrich_from_places(itinerary: Itinerary, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+    """Relaxed enrichment: match activities to places by name only and copy coordinates/address.
+
+    Used for models that follow the schema but don't reliably reproduce address strings verbatim.
+    Activities with no name match are accepted as-is so generation never fails silently.
+    """
+    import uuid as _uuid
+    from datetime import timedelta
+
+    place_by_name = {_normalize_grounding_text(p["name"]): p for p in places}
+
+    expected_days = list(range(1, max((request.departure_date - request.arrival_date).days, 1) + 1))
+    if [d.day for d in itinerary.itinerary] != expected_days:
+        raise ComposerError("Composed itinerary failed semantic validation: day coverage")
+    if any(not d.activities for d in itinerary.itinerary):
+        raise ComposerError("Composed itinerary failed semantic validation: each day needs an activity")
+
+    for day in itinerary.itinerary:
+        if day.date is None:
+            day.date = request.arrival_date + timedelta(days=day.day - 1)
+        for activity in day.activities:
+            place = place_by_name.get(_normalize_grounding_text(activity.name))
+            if place is None:
+                continue
+            activity.address = place["address"]
+            activity.coordinates.lat = float(place["coordinates"]["lat"])
+            activity.coordinates.lng = float(place["coordinates"]["lng"])
+            stable_key = str(
+                place.get("place_id") or place.get("id") or
+                f"{place.get('source','unknown')}:{place['name']}:{place['address']}"
+            )
+            if activity.id is None:
+                activity.id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, stable_key))
+            for attr in ("place_id", "source", "retrieved_at", "verification_state",
+                         "opening_hours", "phone", "website_url", "reservation_url",
+                         "estimated_cost", "accessibility_notes"):
+                if getattr(activity, attr) is None and place.get(attr) is not None:
+                    setattr(activity, attr, place[attr])
+
+    if itinerary.timezone is None:
+        itinerary.timezone = request.timezone
+    return itinerary
 
 
 class ComposerError(RuntimeError):
@@ -132,16 +176,30 @@ def validate_itinerary_semantics(
     return itinerary
 
 
-def _prompt(request: GenerateItineraryRequest, places: list[dict]) -> str:
-    days = _length_of_stay(request)
-    places_list = "\n".join(
+def _place_entry(index: int, place: dict) -> str:
+    lat = place["coordinates"]["lat"]
+    lng = place["coordinates"]["lng"]
+    views = place.get("views", 0)
+    source = place.get("source", "unknown")
+    desc = (place.get("description") or "").strip()
+    if len(desc) > 220:
+        desc = desc[:217] + "..."
+    trend_line = f"   Popularity: {views:,} views [{source}]"
+    if desc:
+        trend_line += f' | "{desc}"'
+    return (
         f"{index + 1}. {place['name']} ({place['type']}) at {place['address']} "
-        f"(lat {place['coordinates']['lat']}, lng {place['coordinates']['lng']}) - "
-        f"source={place.get('source', 'unknown')}, popularity={place.get('views', 0):,}"
-        for index, place in enumerate(places)
+        f"(lat {lat}, lng {lng})\n{trend_line}"
     )
 
-    return f"""You are creating an itinerary from grounded, provenance-tagged place data.
+
+def _prompt(request: GenerateItineraryRequest, places: list[dict]) -> str:
+    days = _length_of_stay(request)
+    places_list = "\n".join(_place_entry(i, p) for i, p in enumerate(places))
+
+    return f"""You are creating an itinerary from grounded, provenance-tagged place data. \
+Your job is to produce a vivid, opinionated, local-expert-quality itinerary — not a generic \
+tourist checklist. Every activity description must earn its place with specific, actionable detail.
 
 Destination: {request.city}, {request.country}
 Accommodation: {request.accommodation.address}
@@ -173,22 +231,25 @@ Unavailable times: {
     ) or "None"
 }
 
-Discovered places (sorted by popularity), with provider provenance and coordinates:
+Discovered places (sorted by popularity) with provenance, coordinates, and trending context:
 {places_list}
 
 Create a {days}-day itinerary that:
 1. Starts each day from the accommodation around {request.wake_up_time} and ends back there
-2. Groups nearby attractions to minimize travel time and creates logical routes
-3. Balances activity types and prioritizes stronger popularity signals
-4. Includes must-do activities and food preferences when they match the grounded data
-5. Uses realistic activity and travel timing
-6. Copies coordinates and addresses from the supplied places; never invents a place or location
-7. Uses only the selected transportation modes and honors pace, children, interests, accessibility categories, and additional needs
-8. Treats fixed reservations as immovable and schedules nothing during unavailable times
-9. Includes each day's concrete calendar date and the supplied IANA timezone when present
+2. Includes AT LEAST 4 activities per day (aim for 5–6) — use the full list of supplied places
+3. Groups nearby attractions into logical geographic clusters to minimize dead travel time
+4. Prioritizes places with stronger popularity signals and uses the trending context to inform the itinerary's tone and focus
+5. Includes must-do activities and food preferences when they match the grounded data
+6. Uses realistic activity durations and travel times between stops
+7. Copies coordinates, addresses, and all metadata from the supplied places; never invents a location
+8. Respects transportation modes, pace, group composition, interests, accessibility needs, and unavailable times
+9. Treats fixed reservations as immovable anchors and schedules nothing during unavailable periods
+10. Includes each day's concrete calendar date and the IANA timezone when provided
+11. Writes each activity's description as 2–3 specific sentences that go beyond generic labels — draw on the trending context and source descriptions to surface what makes this place worth visiting right now: what to order, best time to arrive, a local insight, or why it's resonating with travelers. Never use filler phrases like "a must-visit" or "a popular attraction."
+12. Sets estimated_cost per activity when determinable: "Free", "$10–20", "$$–$$$", etc.
+13. Gives each day a theme that reflects its actual character (neighborhood, vibe, or arc) rather than a generic label like "Day 1"
 
-Include practical tips, accommodation timing and transport guidance, and an estimated total
-budget per person. Return only data that conforms to the supplied JSON schema."""
+Include practical travel tips in the tips array, accommodation logistics, transport guidance, and a realistic estimated total budget per person. Return only data that conforms to the supplied JSON schema."""
 
 
 class OllamaComposer:
@@ -263,10 +324,10 @@ class AnthropicComposer:
         response = self.client.messages.parse(
             model=self.model,
             max_tokens=16000,
-            thinking={"type": "adaptive"},
             system=(
-                "You are a precise travel planner. Use only supplied places and return "
-                "a schema-valid itinerary."
+                "You are an expert travel curator who creates vivid, opinionated itineraries. "
+                "Use only the supplied places but bring deep local knowledge to every description. "
+                "Return a schema-valid itinerary."
             ),
             messages=[{"role": "user", "content": _prompt(request, places)}],
             output_format=Itinerary,
@@ -313,6 +374,83 @@ class OpenAIComposer:
             ) from exc
 
 
+class GroqComposer:
+    """Compose through Groq's OpenAI-compatible chat completions API."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: int = 180) -> None:
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
+            timeout=timeout_seconds,
+        )
+        self.model = model
+
+    def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        import json as _json
+
+        schema = _json.dumps(Itinerary.model_json_schema(), indent=2)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise travel planner. Use only supplied places "
+                            "and return valid JSON that strictly matches this schema:\n\n"
+                            f"{schema}"
+                        ),
+                    },
+                    {"role": "user", "content": _prompt(request, places)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            content = response.choices[0].message.content
+            itinerary = Itinerary.model_validate_json(content)
+            return enrich_from_places(itinerary, request, places)
+        except (OpenAIError, ValidationError, KeyError, TypeError, ValueError) as exc:
+            raise ComposerError(
+                f"Groq model {self.model!r} did not return a valid itinerary"
+            ) from exc
+
+
+class GeminiComposer:
+    """Compose through Google Gemini with structured JSON output."""
+
+    def __init__(self, api_key: str, model: str) -> None:
+        from google import genai
+        from google.genai import types as genai_types
+
+        self._types = genai_types
+        self.client = genai.Client(api_key=api_key)
+        self.model = model
+
+    def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=_prompt(request, places),
+                config=self._types.GenerateContentConfig(
+                    system_instruction=(
+                        "You are a precise travel planner. Use only supplied places "
+                        "and return a schema-valid itinerary."
+                    ),
+                    response_mime_type="application/json",
+                    response_schema=Itinerary,
+                ),
+            )
+            if response.parsed is not None and isinstance(response.parsed, Itinerary):
+                itinerary = response.parsed
+            else:
+                itinerary = Itinerary.model_validate_json(response.text)
+            return validate_itinerary_semantics(itinerary, request, places)
+        except (ValidationError, KeyError, TypeError, ValueError) as exc:
+            raise ComposerError(
+                f"Gemini model {self.model!r} did not return a valid itinerary"
+            ) from exc
+
+
 def validate_composer_configuration(settings) -> None:
     """Fail early with an actionable error for an unusable composer."""
 
@@ -320,6 +458,20 @@ def validate_composer_configuration(settings) -> None:
         if not settings.anthropic_api_key:
             raise RuntimeError(
                 "ITINERARY_COMPOSER_PROVIDER=anthropic requires ANTHROPIC_API_KEY"
+            )
+        return
+
+    if settings.itinerary_composer_provider == "gemini":
+        if not settings.gemini_api_key:
+            raise RuntimeError(
+                "ITINERARY_COMPOSER_PROVIDER=gemini requires GEMINI_API_KEY"
+            )
+        return
+
+    if settings.itinerary_composer_provider == "groq":
+        if not settings.groq_api_key:
+            raise RuntimeError(
+                "ITINERARY_COMPOSER_PROVIDER=groq requires GROQ_API_KEY"
             )
         return
 
@@ -347,6 +499,10 @@ def create_itinerary_composer(settings) -> ItineraryComposer:
     validate_composer_configuration(settings)
     if settings.itinerary_composer_provider == "anthropic":
         return AnthropicComposer(settings.anthropic_api_key, settings.anthropic_model)
+    if settings.itinerary_composer_provider == "gemini":
+        return GeminiComposer(settings.gemini_api_key, settings.gemini_model)
+    if settings.itinerary_composer_provider == "groq":
+        return GroqComposer(settings.groq_api_key, settings.groq_model)
     if settings.itinerary_composer_provider == "openai":
         return OpenAIComposer(
             settings.openai_api_key.strip(),

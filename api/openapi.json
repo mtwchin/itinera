@@ -281,6 +281,45 @@
         "title": "AddActivityOperation",
         "type": "object"
       },
+      "AdmissionErrorDetail": {
+        "properties": {
+          "code": {
+            "enum": [
+              "generation_disabled",
+              "generation_admission_unavailable",
+              "generation_rate_limited",
+              "guest_admission_unavailable",
+              "guest_session_rate_limited",
+              "stream_admission_unavailable",
+              "stream_limit_reached"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "AdmissionErrorDetail",
+        "type": "object"
+      },
+      "AdmissionErrorResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/AdmissionErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "AdmissionErrorResponse",
+        "type": "object"
+      },
       "AppleIdentityRequest": {
         "properties": {
           "identity_token": {
@@ -1107,6 +1146,18 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "HealthResponse",
+        "type": "object"
+      },
       "Itinerary": {
         "properties": {
           "accommodation_info": {
@@ -1598,6 +1649,71 @@
           "is_saved"
         ],
         "title": "PopularItinerarySummary",
+        "type": "object"
+      },
+      "ReadinessChecks": {
+        "properties": {
+          "admission": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Admission",
+            "type": "string"
+          },
+          "configuration": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Configuration",
+            "type": "string"
+          },
+          "migration": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Migration",
+            "type": "string"
+          },
+          "postgres": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Postgres",
+            "type": "string"
+          }
+        },
+        "required": [
+          "postgres",
+          "migration",
+          "admission",
+          "configuration"
+        ],
+        "title": "ReadinessChecks",
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
         "type": "object"
       },
       "RefreshTokenRequest": {
@@ -2362,6 +2478,44 @@
               }
             },
             "description": "Successful Response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Guest-session admission limit reached",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1.0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Guest-session admission cannot be evaluated",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1.0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Create Guest",
@@ -2385,7 +2539,10 @@
         },
         "responses": {
           "204": {
-            "description": "Successful Response"
+            "description": "Account data is absent after deletion or safe replay"
+          },
+          "401": {
+            "description": "Bearer token is invalid, or is expired while its account still exists"
           },
           "422": {
             "content": {
@@ -2583,6 +2740,9 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "description": "Idempotency key was reused with a different request"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2592,6 +2752,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Generation admission limit reached",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Generation is disabled or admission is unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3764,11 +3962,13 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Bounded itinerary status event stream"
           },
           "422": {
             "content": {
@@ -3779,6 +3979,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Per-principal stream cap reached",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionErrorResponse"
+                }
+              }
+            },
+            "description": "Stream admission cannot be evaluated",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the client should retry.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4017,17 +4255,14 @@
     },
     "/healthz": {
       "get": {
+        "description": "Process-only liveness; deliberately has no dependency probes.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Healthz Healthz Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             },
@@ -4065,15 +4300,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Readyz Readyz Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ReadinessResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "One or more API-owned readiness checks failed"
           }
         },
         "summary": "Readyz",

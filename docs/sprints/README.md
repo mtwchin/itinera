@@ -1,0 +1,219 @@
+# Itinera delivery program
+
+**Program started:** July 13, 2026
+
+**Mainline baseline:** `ed130e8`
+
+**Current integration branch:** `codex/sprint-1-integration`
+
+**Product direction:** an adaptive, private, offline-first pocket field guide
+
+This directory is the durable sprint ledger for coordinated engineering and
+design work. Each sprint owns a bounded outcome, records acceptance criteria
+before implementation, and ends with independent review, test evidence, an
+intentional commit, a pushed branch, and an integration handoff.
+
+## Program status
+
+| Track | Owner task | Sprint | Status and boundary |
+|---|---|---|---|
+| Platform | Itinera Senior SWE — Correct Trip State | P1 | Complete and review-clear; backend state correctness, SSE lifecycle, deletion/privacy transition |
+| Product design | Itinera Design Pro — Adaptive Today | D1 | Complete and review-clear; SwiftUI Today timing, accessibility, previews, and deterministic tests |
+| Integration | Program lead | I1 | Complete; combined gate green and accepted for downstream sprints |
+| Next platform | Fresh Senior SWE task from accepted I1 | P2 | Atomic admission, stream caps, and honest API readiness; backend only |
+| Next product | Fresh Design Pro/iOS privacy task from accepted I1 | D2 | Principal-scoped offline identity and safe account switching; iOS only |
+
+The implementation tasks run in isolated Codex worktrees created from the same
+accepted revision. Platform and iOS sprints are file-disjoint where practical;
+the integration branch is the only place their complete validation matrix is
+accepted.
+
+## Sprint P1 — Correct Trip State
+
+### Accepted outcome
+
+PostgreSQL is now the sole authority for itinerary state, content,
+authorization, and versioning. Redis carries only ephemeral progress hints;
+the terminal itinerary cache and Celery result retention path are removed.
+
+Delivered on `codex/correct-trip-state`:
+
+- `ae83186` — `fix: keep trip revisions cache-coherent`
+- `787a120` — `fix: make itinerary state database-authoritative`
+
+The second commit deliberately simplifies the first design rather than adding
+another coherence protocol:
+
+- status reads return the already-authorized PostgreSQL row;
+- SSE subscribes before a fresh authoritative reconciliation, polls with a
+  new short-lived session, bounds every Redis operation, preserves healthy
+  idle subscriptions, and closes after a configurable five-minute reconnect
+  boundary;
+- workers commit before optional publish, return only compact metadata, use
+  `ignore_result=True`, and never write itinerary documents to Redis;
+- account deletion prelocks the two audited child-first writer families in a
+  deterministic order without enumerating cache keys;
+- the rollout runbook inventories real endpoint/database targets, derives its
+  wait from observed TTL/PTTL values, gates Delete My Data through the legacy
+  retention window, and prohibits an unsafe legacy-writer rollback.
+
+Independent review found no remaining P1/P2 blocker. The distributed
+per-principal concurrent-stream cap is explicitly assigned to P2.
+
+## Sprint D1 — Adaptive Today
+
+### Accepted outcome
+
+Today now gives the traveler an honest route-aware answer without claiming to
+know their location or silently changing their itinerary.
+
+Delivered on `codex/adaptive-today`:
+
+- `0f1d489` — `feat(ios): add route-aware adaptive Today`
+
+The vertical slice includes:
+
+- traveler-first hierarchy: current stop and one-tap directions before timing;
+- named planned-leg timing with walking, driving, and transit selection;
+- current-route ETA semantics for walking/driving and past transit;
+- scheduled arrive-by semantics for future transit, including an explicit
+  recheck state when the calculated departure has passed;
+- fail-closed planned-time fallback for missing/invalid destination time zones,
+  malformed times, skipped origins, cancellation, offline/provider failure,
+  and invalid route data;
+- stale-request and initial-progress race protection;
+- a non-mutating Running Late entry into the existing editor with precise
+  quick-refinement lock copy;
+- Dynamic Type fallbacks, ordered VoiceOver summaries, Reduce Motion support,
+  44-point controls, and a real compact-width preview.
+
+Independent design review found no remaining correctness, UX-truthfulness,
+accessibility, privacy, project-inclusion, preview, test, or documentation
+blocker. Route estimates remain intentionally transient and are not published
+to Widget or Live Activity surfaces until those contracts carry time-zone and
+route-basis provenance.
+
+## Integration I1 evidence
+
+Accepted commits on `codex/sprint-1-integration`:
+
+- `0c35722` — integrated D1
+- `df4e89b` and `7cb9603` — integrated P1
+
+Complete combined validation on July 13, 2026:
+
+- Ruff passed across `backend`, `tests`, and `scripts`.
+- All **142 backend tests** passed, 11 above the 131-test baseline.
+- The committed OpenAPI contract is current.
+- Alembic reports one head (`f61d2a8b9c43`) and emitted the complete static
+  PostgreSQL upgrade.
+- Docker Compose validation passed.
+- Campaign-site ESLint, production build, and **2/2 rendered HTML tests**
+  passed.
+- Two consecutive XcodeGen runs were byte-identical; project SHA-256 is
+  `efff34c98be10f86530d9c95cd4ea2f85c1b958e94af11dc61ef00fd12d4f903`.
+- All **87 iOS tests** passed, including 19 focused Today tests.
+- Debug test and Release simulator builds succeeded without warnings.
+- The Release artifact contains `https://api.example.test` and no arbitrary
+  transport-security load override.
+- `git diff --check` passed and the integration worktree was clean before this
+  ledger update.
+
+## Next sprint contracts
+
+### P2 — Atomic Admission and Honest API Readiness
+
+**Owner:** fresh Senior SWE / Platform Lead task
+
+**Suggested branch:** `codex/p2-atomic-admission-readiness`
+
+Outcome: the API admits expensive work atomically and reports readiness only
+for dependencies the API role can actually prove.
+
+Committed scope:
+
+- replace split Redis `INCR`/`EXPIRE` admission with one atomic, versioned
+  per-principal plus global decision and deterministic `Retry-After`;
+- bound Redis connect/read operations, fail closed with a typed 503, and add an
+  operational generation kill switch;
+- add a distributed per-principal concurrent-SSE lease/cap compatible with the
+  P1 reconnect boundary, including stale-lease recovery;
+- keep `/healthz` as process liveness and make `/readyz` verify PostgreSQL,
+  current migration head, Redis/admission, and API-role production config;
+- make Compose/Render health checks use readiness where traffic routing needs
+  it;
+- add real PostgreSQL/Redis CI coverage for concurrent admission and readiness;
+- version keys and document safe rollback.
+
+Out of scope: provider/worker-health claims, spend ledgers, App Attest, and job
+retry semantics.
+
+### D2 — Private Offline Identity
+
+**Owner:** fresh Design Pro / Senior iOS Privacy Lead task
+
+**Suggested branch:** `codex/d2-private-offline-identity`
+
+Outcome: no traveler can see, publish, submit, or mutate another principal's
+offline state when identity is restored, linked, or switched.
+
+Committed scope:
+
+- persist the server-issued user ID with credentials while retaining safe
+  legacy decoding;
+- complete identity bootstrap before loading or publishing private trip state;
+- namespace completed trips, progress, pending jobs/submissions, drafts, and
+  locked-stop state by an opaque principal digest;
+- scope the App Group widget snapshot and remove old-principal Widget, Live
+  Activity, and notification state before publishing the new principal;
+- handle Apple-link/account-switch outcomes explicitly without briefly showing
+  the wrong library;
+- quarantine or fail closed on unscoped legacy data; never submit an unscoped
+  pending request;
+- preserve offline use for a previously established principal;
+- add deterministic migration, relaunch, offline, and rapid-switch tests plus
+  accessible loading/error/empty states.
+
+Out of scope: backend API changes, cross-account library merging, and cloud
+sync.
+
+## Following queue
+
+After P2/D2, re-rank from evidence rather than novelty:
+
+1. stable stop-ID mutation targets, client mutation IDs, and conflict UX;
+2. targeted APNs generation completion with direct trip deep links;
+3. route-aware running-late refinement proposals with preview/approve/undo;
+4. cursor-paginated trip summaries and lazy detail loading;
+5. reservation/document extraction with review and duplicate detection;
+6. bounded job retries, public error codes, retention jobs, and spend ceilings;
+7. deterministic schedule feasibility and a model-quality evaluation ledger;
+8. optional on-device Foundation Models assistance on supported Apple devices.
+
+## Definition of done for every sprint
+
+- scope, dependencies, data flow, failure states, privacy impact, and rollback
+  are written before broad implementation;
+- server mutations are authorized, concurrency-safe, and idempotent;
+- user-facing changes include accessibility, offline, loading, empty, and error
+  states;
+- OpenAPI and Swift contracts remain compatible or migrate explicitly;
+- focused tests plus the relevant full suites pass;
+- at least one independent read-only review clears the final diff;
+- documentation reflects what was implemented rather than intent;
+- changes are committed intentionally and pushed on a scoped branch;
+- the handoff names remaining risks and proposes the next smallest sprint.
+
+## Program log
+
+### July 13, 2026
+
+- created and pinned isolated Senior SWE and Design Pro tasks from `ed130e8`;
+- established `codex/sprint-program` with the coordinated delivery contract;
+- corrected P1 from version-aware caching to a simpler PostgreSQL-authoritative
+  model after race, privacy, lifecycle, and rollout review;
+- corrected D1 through independent hierarchy, transit-basis, time-zone,
+  cancellation, parsing, accessibility, and copy review;
+- accepted and integrated P1/D1 after independent review and complete gates;
+- prepared the mutually file-disjoint P2/D2 contracts for fresh task chats
+  starting from the pushed I1 revision.

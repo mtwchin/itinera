@@ -221,6 +221,21 @@ def simulate_trending_places(city: str, country: str) -> list[dict]:
         {"name": "Historic Temple", "type": "culture"},
         {"name": f"{city} Night Market", "type": "food"},
         {"name": f"{city} Central Park", "type": "nature"},
+        {"name": f"{city} Botanical Garden", "type": "nature"},
+        {"name": f"{city} Street Food Alley", "type": "food"},
+        {"name": f"{city} Cultural Quarter", "type": "culture"},
+        {"name": "Local Craft Market", "type": "shopping"},
+        {"name": f"{city} Rooftop Bar", "type": "entertainment"},
+        {"name": f"{city} Historic Palace", "type": "landmark"},
+        {"name": "Famous Local Bakery", "type": "food"},
+        {"name": f"{city} Contemporary Art Gallery", "type": "culture"},
+        {"name": f"{city} Harbor", "type": "nature"},
+        {"name": f"{city} Flea Market", "type": "shopping"},
+        {"name": "Neighborhood Izakaya", "type": "food"},
+        {"name": f"{city} Observation Tower", "type": "landmark"},
+        {"name": f"{city} Riverside Walk", "type": "nature"},
+        {"name": "Local Coffee Roaster", "type": "food"},
+        {"name": f"{city} Underground Market", "type": "shopping"},
     ]
     rng = random.Random(f"{city.casefold()}|{country.casefold()}")
     return [

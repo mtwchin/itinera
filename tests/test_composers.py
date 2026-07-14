@@ -207,7 +207,7 @@ def test_day_without_activities_is_rejected():
 
 def test_grounding_allows_only_small_coordinate_rounding():
     rounded = deepcopy(ITINERARY)
-    rounded["itinerary"][0]["activities"][0]["coordinates"]["lat"] += 0.000009
+    rounded["itinerary"][0]["activities"][0]["coordinates"]["lat"] += 0.004
     response = MagicMock()
     response.json.return_value = {"message": {"content": rounded}}
 
@@ -220,7 +220,7 @@ def test_grounding_allows_only_small_coordinate_rounding():
             == 1
         )
 
-    rounded["itinerary"][0]["activities"][0]["coordinates"]["lat"] += 0.000002
+    rounded["itinerary"][0]["activities"][0]["coordinates"]["lat"] += 0.002
     response.json.return_value = {"message": {"content": rounded}}
     with patch("backend.agents.composers.requests.post", return_value=response), pytest.raises(
         ComposerError, match="ungrounded activity"

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from backend.auth import current_user
 from backend.agents.composers import _prompt, validate_itinerary_semantics
@@ -23,6 +24,7 @@ from backend.db.repo import (
     InvalidRevisionError,
     ItineraryVersionConflictError,
     apply_itinerary_operations,
+    delete_user_data,
     duplicate_owned_itinerary,
     list_itineraries,
     materialize_activity_ids,
@@ -435,6 +437,27 @@ def test_trip_can_be_restored_from_archive(trip_client):
     )
 
 
+def test_duplicate_commits_without_request_side_terminal_document(trip_client):
+    client, session, user = trip_client
+    duplicate = itinerary_row(user)
+    duplicate.job_id = "trip-copy"
+    duplicate.version = 1
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
+
+    with patch(
+        "backend.routers.trips.duplicate_owned_itinerary",
+        new_callable=AsyncMock,
+        return_value=duplicate,
+    ):
+        response = client.post("/api/v1/itineraries/trip-1/duplicate")
+
+    assert response.status_code == 201
+    assert response.json()["job_id"] == "trip-copy"
+    assert response.json()["version"] == 1
+    assert order == ["commit"]
+
+
 def test_include_archived_listing_remains_owner_scoped(trip_client):
     client, session, user = trip_client
     row = itinerary_row(user)
@@ -499,6 +522,7 @@ def test_revision_conflict_returns_current_version(trip_client):
 def test_revision_response_contains_new_version(trip_client):
     client, session, user = trip_client
     row = itinerary_row(user)
+    row.version = 3
     revision = ItineraryRevision(
         id=uuid.uuid4(),
         itinerary_id=row.id,
@@ -509,6 +533,8 @@ def test_revision_response_contains_new_version(trip_client):
         result=result(),
         created_at=datetime.now(timezone.utc),
     )
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
         "backend.routers.trips.revise_itinerary",
         new_callable=AsyncMock,
@@ -522,6 +548,7 @@ def test_revision_response_contains_new_version(trip_client):
     assert response.status_code == 201
     assert response.json()["to_version"] == 3
     session.commit.assert_awaited_once()
+    assert order == ["commit"]
 
 
 def test_reservation_endpoint_persists_typed_owner_scoped_data(trip_client):
@@ -607,14 +634,39 @@ def test_delete_trip_does_not_disclose_another_users_trip(trip_client):
     session.commit.assert_not_awaited()
 
 
+def test_delete_trip_commits_without_redis_cleanup(trip_client):
+    client, session, _ = trip_client
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
+    with patch(
+        "backend.routers.trips.delete_owned_itinerary",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        response = client.delete("/api/v1/itineraries/trip-1")
+
+    assert response.status_code == 204
+    assert order == ["commit"]
+
+
 def test_delete_my_data_requires_exact_confirmation(trip_client):
+    from backend.auth import DeletionIdentity, deletion_identity
+
     client, session, user = trip_client
+    app.dependency_overrides[deletion_identity] = lambda: DeletionIdentity(
+        subject_id=user.id,
+        user=user,
+    )
     assert client.request(
         "DELETE", "/api/v1/auth/me", json={"confirmation": "delete"}
     ).status_code == 422
 
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
-        "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        "backend.routers.auth.delete_user_data",
+        new_callable=AsyncMock,
+        return_value=None,
     ) as delete_data:
         response = client.request(
             "DELETE", "/api/v1/auth/me", json={"confirmation": "DELETE"}
@@ -623,3 +675,39 @@ def test_delete_my_data_requires_exact_confirmation(trip_client):
     assert response.status_code == 204
     delete_data.assert_awaited_once_with(session, user=user)
     session.commit.assert_awaited_once()
+    assert order == ["commit"]
+
+
+@pytest.mark.asyncio
+async def test_delete_user_data_prelocks_child_writers_before_bulk_delete():
+    user = User(id=uuid.uuid4())
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+
+    deleted = await delete_user_data(session, user=user)
+
+    assert deleted is None
+    assert session.execute.await_count == 3
+    itinerary_lock, refresh_lock, delete_statement = [
+        awaited.args[0] for awaited in session.execute.await_args_list
+    ]
+    compiled_itinerary_lock = str(
+        itinerary_lock.compile(dialect=postgresql.dialect())
+    )
+    compiled_refresh_lock = str(refresh_lock.compile(dialect=postgresql.dialect()))
+    compiled_delete = str(delete_statement.compile(dialect=postgresql.dialect()))
+    assert "FROM itineraries" in compiled_itinerary_lock
+    assert (
+        "ORDER BY itineraries.id FOR UPDATE OF itineraries"
+        in compiled_itinerary_lock
+    )
+    assert "FROM guest_refresh_tokens" in compiled_refresh_lock
+    assert (
+        "ORDER BY guest_refresh_tokens.created_at, guest_refresh_tokens.id "
+        "FOR UPDATE OF guest_refresh_tokens"
+        in compiled_refresh_lock
+    )
+    assert compiled_delete.startswith("DELETE FROM users")
+    assert "itineraries" not in compiled_delete
+    session.flush.assert_awaited_once()

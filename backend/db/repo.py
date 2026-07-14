@@ -25,6 +25,7 @@ from backend.config import get_settings
 from backend.db.models import (
     ChecklistItem,
     CollaborationInvite,
+    GuestRefreshToken,
     Itinerary,
     ItineraryRevision,
     JobStatus,
@@ -55,6 +56,7 @@ class JobClaim:
     job_id: str
     status: JobStatus
     request: dict
+    version: int = 1
     run_token: str | None = None
     result: dict | None = None
     error: str | None = None
@@ -700,7 +702,26 @@ async def accept_collaboration_invite(
 
 
 async def delete_user_data(session: AsyncSession, *, user: User) -> None:
-    await session.delete(user)
+    """Prelock audited child-first writers before deleting their user."""
+
+    await session.execute(
+        select(Itinerary.id)
+        .where(Itinerary.user_id == user.id)
+        .order_by(Itinerary.id)
+        .with_for_update(of=Itinerary)
+    )
+    await session.execute(
+        select(GuestRefreshToken.id)
+        .where(GuestRefreshToken.user_id == user.id)
+        .order_by(GuestRefreshToken.created_at, GuestRefreshToken.id)
+        .with_for_update(of=GuestRefreshToken)
+    )
+
+    await session.execute(
+        delete(User)
+        .where(User.id == user.id)
+        .execution_options(synchronize_session=False)
+    )
     await session.flush()
 
 
@@ -952,6 +973,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     job_id=job_id,
                     status=row.status,
                     request=row.request,
+                    version=row.version or 1,
                     result=row.result,
                     error=row.error,
                 )
@@ -967,6 +989,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     job_id=job_id,
                     status=row.status,
                     request=row.request,
+                    version=row.version or 1,
                 )
 
             run_token = uuid.uuid4().hex
@@ -981,6 +1004,7 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                 job_id=job_id,
                 status=JobStatus.running,
                 request=row.request,
+                version=row.version or 1,
                 run_token=run_token,
             )
     finally:

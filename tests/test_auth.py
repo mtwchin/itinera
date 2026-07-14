@@ -4,58 +4,205 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from redis.exceptions import RedisError
 from starlette.requests import Request
 
+from backend.admission import (
+    AdmissionDecision,
+    AdmissionPolicy,
+    AdmissionReason,
+    CoordinationUnavailableError,
+)
 from backend.auth import (
     RefreshTokenError,
     create_access_token,
     create_guest_session,
     decode_access_token,
+    enforce_generation_rate_limit,
+    enforce_guest_session_rate_limit,
     hash_refresh_token,
     rotate_guest_refresh_token,
     validate_auth_settings,
 )
 from backend.config import Settings
 from backend.db.models import GuestRefreshToken, User
+from backend.db.session import get_session
 from backend.main import app
 
 
 @pytest.mark.asyncio
-async def test_guest_session_admission_is_limited_per_client_and_globally():
-    from backend.auth import enforce_guest_session_rate_limit
-
+async def test_guest_session_admission_uses_one_atomic_pair_decision():
     request = Request({"type": "http", "client": ("203.0.113.7", 1234), "headers": []})
-    with patch("backend.auth._enforce_redis_limit", new_callable=AsyncMock) as limiter:
+    settings = Settings(
+        _env_file=None,
+        env="test",
+        rate_limit_guest_sessions_per_window=7,
+        rate_limit_global_guest_sessions_per_window=17,
+        rate_limit_window_seconds=91,
+        redis_operation_timeout_seconds=0.25,
+    )
+    redis = MagicMock()
+    admitted = AdmissionDecision(
+        admitted=True,
+        reason=AdmissionReason.NONE,
+        retry_after_ms=0,
+        principal_count=1,
+        global_count=1,
+    )
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis", return_value=redis
+    ), patch(
+        "backend.auth.evaluate_admission",
+        new_callable=AsyncMock,
+        return_value=admitted,
+    ) as evaluate:
         await enforce_guest_session_rate_limit(request)
 
-    assert limiter.await_count == 2
-    assert limiter.await_args_list[0].kwargs["key"].startswith(
-        "ratelimit:guest:client:"
+    evaluate.assert_awaited_once_with(
+        redis,
+        AdmissionPolicy.GUEST,
+        "203.0.113.7",
+        environment="test",
+        principal_limit=7,
+        global_limit=17,
+        window_seconds=91,
+        timeout_seconds=0.25,
     )
-    assert limiter.await_args_list[1].kwargs["key"] == "ratelimit:guest:global"
 
 
 @pytest.mark.asyncio
-async def test_admission_control_fails_closed_when_redis_is_unavailable():
-    from backend.auth import _enforce_redis_limit
-
-    redis = MagicMock()
-    redis.incr = AsyncMock(side_effect=RedisError("unavailable"))
-    with patch("backend.auth.get_redis", return_value=redis), pytest.raises(
-        HTTPException
-    ) as exc_info:
-        await _enforce_redis_limit(
-            key="ratelimit:test",
-            limit=1,
-            window_seconds=60,
-            detail="limited",
-        )
+async def test_guest_session_admission_fails_closed_with_typed_503():
+    request = Request({"type": "http", "client": ("203.0.113.7", 1234), "headers": []})
+    settings = Settings(
+        _env_file=None,
+        env="test",
+        admission_unavailable_retry_after_seconds=13,
+    )
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis", return_value=MagicMock()
+    ), patch(
+        "backend.auth.evaluate_admission",
+        new_callable=AsyncMock,
+        side_effect=CoordinationUnavailableError("redis unavailable"),
+    ), pytest.raises(HTTPException) as exc_info:
+        await enforce_guest_session_rate_limit(request)
 
     assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "code": "guest_admission_unavailable",
+        "message": "Guest-session admission is temporarily unavailable.",
+    }
+    assert exc_info.value.headers == {"Retry-After": "13"}
+
+
+@pytest.mark.asyncio
+async def test_guest_session_atomic_denial_returns_typed_429():
+    request = Request({"type": "http", "client": ("203.0.113.7", 1234), "headers": []})
+    settings = Settings(_env_file=None, env="test")
+    denied = AdmissionDecision(
+        admitted=False,
+        reason=AdmissionReason.PRINCIPAL | AdmissionReason.GLOBAL,
+        retry_after_ms=2_001,
+        principal_count=20,
+        global_count=5_000,
+    )
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis", return_value=MagicMock()
+    ), patch(
+        "backend.auth.evaluate_admission",
+        new_callable=AsyncMock,
+        return_value=denied,
+    ), pytest.raises(HTTPException) as exc_info:
+        await enforce_guest_session_rate_limit(request)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == {
+        "code": "guest_session_rate_limited",
+        "message": "Guest-session capacity is temporarily full; try again later.",
+    }
+    assert exc_info.value.headers == {"Retry-After": "3"}
+
+
+@pytest.mark.asyncio
+async def test_generation_kill_switch_rejects_without_consulting_redis():
+    settings = Settings(
+        _env_file=None,
+        env="test",
+        generation_admission_enabled=False,
+        generation_disabled_retry_after_seconds=47,
+    )
+    user = User(id=uuid.uuid4())
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis"
+    ) as get_redis, patch(
+        "backend.auth.evaluate_admission", new_callable=AsyncMock
+    ) as evaluate, pytest.raises(HTTPException) as exc_info:
+        await enforce_generation_rate_limit(user)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "code": "generation_disabled",
+        "message": "New itinerary generation is temporarily paused.",
+    }
+    assert exc_info.value.headers == {"Retry-After": "47"}
+    get_redis.assert_not_called()
+    evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generation_atomic_denial_returns_deterministic_typed_429():
+    settings = Settings(_env_file=None, env="test")
+    user = User(id=uuid.uuid4())
+    denied = AdmissionDecision(
+        admitted=False,
+        reason=AdmissionReason.GLOBAL,
+        retry_after_ms=60_001,
+        principal_count=1,
+        global_count=1_000,
+    )
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis", return_value=MagicMock()
+    ), patch(
+        "backend.auth.evaluate_admission",
+        new_callable=AsyncMock,
+        return_value=denied,
+    ), pytest.raises(HTTPException) as exc_info:
+        await enforce_generation_rate_limit(user)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == {
+        "code": "generation_rate_limited",
+        "message": "Generation capacity is temporarily full; try again later.",
+    }
+    assert exc_info.value.headers == {"Retry-After": "61"}
+
+
+@pytest.mark.asyncio
+async def test_generation_admission_fails_closed_with_typed_503():
+    settings = Settings(
+        _env_file=None,
+        env="test",
+        admission_unavailable_retry_after_seconds=11,
+    )
+    user = User(id=uuid.uuid4())
+    with patch("backend.auth.get_settings", return_value=settings), patch(
+        "backend.auth.get_redis", return_value=MagicMock()
+    ), patch(
+        "backend.auth.evaluate_admission",
+        new_callable=AsyncMock,
+        side_effect=CoordinationUnavailableError("redis unavailable"),
+    ), pytest.raises(HTTPException) as exc_info:
+        await enforce_generation_rate_limit(user)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "code": "generation_admission_unavailable",
+        "message": "Generation admission is temporarily unavailable.",
+    }
+    assert exc_info.value.headers == {"Retry-After": "11"}
 
 
 def test_access_token_round_trip_and_required_claims():
@@ -256,8 +403,6 @@ def test_refresh_endpoint_rotates_token():
 
 
 def test_refresh_reuse_returns_401_after_persisting_revocation():
-    from backend.db.session import get_session
-
     session = AsyncMock()
     app.dependency_overrides[get_session] = lambda: session
     try:
@@ -275,6 +420,283 @@ def test_refresh_reuse_returns_401_after_persisting_revocation():
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
     session.commit.assert_awaited_once()
+
+
+def _deletion_session(*lookup_users: User | None) -> MagicMock:
+    lookup_results: list[MagicMock] = []
+    for user in lookup_users:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = user
+        lookup_results.append(result)
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=lookup_results)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    return session
+
+
+def test_delete_my_data_first_request_commits_after_exact_confirmation():
+    user = User(id=uuid.uuid4())
+    session = _deletion_session(user)
+    token = create_access_token(user.id)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 204
+    assert response.content == b""
+    delete_data.assert_awaited_once_with(session, user=user)
+    session.commit.assert_awaited_once()
+    session.rollback.assert_not_awaited()
+
+
+def test_delete_my_data_preserves_exact_confirmation():
+    user = User(id=uuid.uuid4())
+    session = _deletion_session(user)
+    token = create_access_token(user.id)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "delete"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    delete_data.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+def test_delete_my_data_openapi_documents_retry_convergence_boundary():
+    responses = app.openapi()["paths"]["/api/v1/auth/me"]["delete"]["responses"]
+
+    assert "safe replay" in responses["204"]["description"]
+    assert "expired while its account still exists" in responses["401"][
+        "description"
+    ]
+    assert "content" not in responses["204"]
+
+
+def test_delete_my_data_lost_response_replay_converges_to_204():
+    user = User(id=uuid.uuid4())
+    session = _deletion_session(user, None)
+    token = create_access_token(user.id)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            first = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+            replay = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 204
+    assert replay.status_code == 204
+    assert session.execute.await_count == 2
+    delete_data.assert_awaited_once_with(session, user=user)
+    session.commit.assert_awaited_once()
+
+
+def test_delete_my_data_expired_replay_converges_when_subject_is_missing():
+    user_id = uuid.uuid4()
+    token = create_access_token(
+        user_id, now=datetime.now(timezone.utc) - timedelta(hours=2)
+    )
+    session = _deletion_session(None)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 204
+    delete_data.assert_not_awaited()
+    session.commit.assert_not_awaited()
+    session.rollback.assert_not_awaited()
+
+
+def test_delete_my_data_expired_token_cannot_delete_existing_subject():
+    user = User(id=uuid.uuid4())
+    token = create_access_token(
+        user.id, now=datetime.now(timezone.utc) - timedelta(hours=2)
+    )
+    session = _deletion_session(user)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired access token"}
+    assert response.headers["www-authenticate"] == "Bearer"
+    delete_data.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("token_kind", ["malformed", "wrong_signature"])
+def test_delete_my_data_rejects_unproven_subjects_without_database_lookup(token_kind):
+    user_id = uuid.uuid4()
+    if token_kind == "malformed":
+        token = "not-a-signed-jwt"
+    else:
+        wrong_settings = Settings(
+            _env_file=None,
+            env="test",
+            auth_jwt_secret="wrong-signature-secret-that-is-long-enough",
+        )
+        token = create_access_token(user_id, settings=wrong_settings)
+    session = _deletion_session()
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired access token"}
+    assert response.headers["www-authenticate"] == "Bearer"
+    session.execute.assert_not_awaited()
+    delete_data.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "claim_failure",
+    ["wrong_type", "wrong_issuer", "wrong_audience", "missing_jti", "invalid_sub"],
+)
+def test_delete_my_data_rejects_invalid_signed_claims_before_database_lookup(
+    claim_failure,
+):
+    settings = Settings(_env_file=None, env="test")
+    token = create_access_token(uuid.uuid4(), settings=settings)
+    claims = jwt.decode(
+        token,
+        options={"verify_signature": False},
+        algorithms=["HS256"],
+    )
+    if claim_failure == "wrong_type":
+        claims["type"] = "refresh"
+    elif claim_failure == "wrong_issuer":
+        claims["iss"] = "another-issuer"
+    elif claim_failure == "wrong_audience":
+        claims["aud"] = "another-audience"
+    elif claim_failure == "missing_jti":
+        claims.pop("jti")
+    else:
+        claims["sub"] = "not-a-uuid"
+    invalid_token = jwt.encode(
+        claims,
+        settings.auth_jwt_secret,
+        algorithm="HS256",
+    )
+    session = _deletion_session()
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data", new_callable=AsyncMock
+        ) as delete_data, TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {invalid_token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired access token"}
+    assert response.headers["www-authenticate"] == "Bearer"
+    session.execute.assert_not_awaited()
+    delete_data.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure_at", ["delete", "commit"])
+def test_delete_my_data_transaction_failure_rolls_back_and_never_returns_204(
+    failure_at,
+):
+    user = User(id=uuid.uuid4())
+    session = _deletion_session(user)
+    token = create_access_token(user.id)
+    delete_side_effect = RuntimeError("delete failed") if failure_at == "delete" else None
+    if failure_at == "commit":
+        session.commit.side_effect = RuntimeError("commit failed")
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        with patch(
+            "backend.routers.auth.delete_user_data",
+            new_callable=AsyncMock,
+            side_effect=delete_side_effect,
+        ) as delete_data, TestClient(app, raise_server_exceptions=False) as client:
+            response = client.request(
+                "DELETE",
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"confirmation": "DELETE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    delete_data.assert_awaited_once_with(session, user=user)
+    session.rollback.assert_awaited_once()
+    if failure_at == "delete":
+        session.commit.assert_not_awaited()
+    else:
+        session.commit.assert_awaited_once()
 
 
 def _apple_auth_session(user: User | None) -> MagicMock:

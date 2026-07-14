@@ -26,6 +26,7 @@ struct TripEditorView: View {
         tripTitle: String,
         itinerary: Itinerary,
         version: Int,
+        initialDay: Int? = nil,
         onApply: @escaping (Itinerary, Int) -> Void
     ) {
         self.jobID = jobID
@@ -33,7 +34,16 @@ struct TripEditorView: View {
         self.onApply = onApply
         _itinerary = State(initialValue: itinerary)
         _version = State(initialValue: version)
-        _selectedDay = State(initialValue: itinerary.itinerary.first?.day ?? 1)
+        let resolvedInitialDay = initialDay.flatMap { requestedDay in
+            itinerary.itinerary.contains { $0.day == requestedDay }
+                ? requestedDay
+                : nil
+        }
+        _selectedDay = State(
+            initialValue: resolvedInitialDay
+                ?? itinerary.itinerary.first?.day
+                ?? 1
+        )
         let stored = UserDefaults.standard.stringArray(
             forKey: Self.lockKey(jobID)
         ) ?? []
@@ -220,7 +230,7 @@ struct TripEditorView: View {
                             toggleLock(activity)
                         } label: {
                             Image(systemName: lockedActivityIDs.contains(activity.id) ? "lock.fill" : "lock.open")
-                                .frame(width: 38, height: 38)
+                                .frame(width: 44, height: 44)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(lockedActivityIDs.contains(activity.id) ? theme.highlightStrong : theme.secondaryText)
@@ -254,7 +264,7 @@ struct TripEditorView: View {
                         } label: {
                             Image(systemName: "ellipsis.circle")
                                 .font(.title3)
-                                .frame(width: 38, height: 38)
+                                .frame(width: 44, height: 44)
                         }
                     }
                 }

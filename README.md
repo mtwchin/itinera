@@ -10,8 +10,8 @@ MapKit-ready locations.
 ```text
 SwiftUI app
   -> FastAPI /api/v1 (guest bearer auth, ownership, idempotency)
-       -> Postgres (users, refresh sessions, jobs, itineraries, outbox)
-       -> Redis (rate limits, terminal cache, foreground progress)
+       -> Postgres (authoritative users, jobs, itineraries, revisions, outbox)
+       -> Redis (atomic admission, stream leases, Celery transport, progress hints)
   -> outbox dispatcher -> Celery queue -> leased generation workers
        -> licensed normalized trends feed
        -> Apple Maps Server API
@@ -174,6 +174,64 @@ The normalized trends endpoint accepts a bearer-authenticated POST body of
 array or a top-level array. Each place supplies at least `name`, with optional
 `type`, `description`, `source`, `source_url`, `views`, and `engagement`.
 
+## Admission and API health operations
+
+Redis admits generation and guest-session work with one atomic principal plus
+global decision. A rejection consumes neither budget. Redis failures and
+timeouts fail admission closed with a typed `503`; PostgreSQL remains the
+authority for itinerary state.
+
+The operational settings are:
+
+- `GENERATION_ADMISSION_ENABLED` — set to `false` to reject genuinely new
+  generation while leaving replays, trip reads, auth, and API readiness live.
+- `GENERATION_DISABLED_RETRY_AFTER_SECONDS` and
+  `ADMISSION_UNAVAILABLE_RETRY_AFTER_SECONDS` — deterministic `Retry-After`
+  values for an intentional generation drain and an unavailable admission
+  dependency, respectively.
+- `RATE_LIMIT_*` and `RATE_LIMIT_WINDOW_SECONDS` — the atomic per-principal and
+  global generation/guest budgets and their shared window.
+- `REDIS_OPERATION_TIMEOUT_SECONDS` — bounds Redis connection, read, script,
+  lease, and cleanup operations.
+- `ITINERARY_STREAM_MAX_CONNECTIONS_PER_PRINCIPAL`,
+  `ITINERARY_STREAM_LEASE_TTL_SECONDS`, and
+  `ITINERARY_STREAM_LEASE_RENEW_SECONDS` — the distributed nonterminal SSE cap
+  and stale-safe lease timing.
+- `ITINERARY_STREAM_DATABASE_TIMEOUT_SECONDS` — bounds PostgreSQL ownership and
+  state reconciliation during a stream; `ITINERARY_STREAM_DATABASE_POOL_SIZE`
+  bounds its isolated short-query pool.
+- `READINESS_CHECK_TIMEOUT_SECONDS` — bounds each API readiness dependency
+  check; `READINESS_CACHE_TTL_SECONDS` coalesces public probe bursts.
+
+The stream reconciliation pool is separate from the API's existing SQLAlchemy
+pool. That engine can open 10 regular plus 20 overflow connections, so the
+default `ITINERARY_STREAM_DATABASE_POOL_SIZE=10` gives one API instance a hard
+ceiling of `10 + 20 + 10 = 40` PostgreSQL connections. Size the database for
+`API instance count × 40`, then add independently budgeted worker, outbox,
+migration, and operator connections plus failure/recovery headroom. Raising the
+stream pool changes that formula to `API instances × (30 + stream pool size)`;
+it is an API-only setting and does not resize another role's SQLAlchemy pool.
+
+`/healthz` is process-only liveness. `/readyz` checks bounded PostgreSQL
+connectivity, compatible migration lineage, and the Redis admission primitive
+through quota-isolated one-second write-probe keys, plus API-owned production
+configuration. The probe proves the Lua write ACL and Cluster path without
+consuming customer quota; any partial failure residue expires within one
+second. It deliberately makes no
+worker, queue, AI-provider, trends-provider, or maps-provider health claim.
+Compose and Render use `/readyz` when deciding whether the API should receive
+traffic. The full mixed-version rollout, rollback, monitoring, and privacy
+contract is in `docs/sprints/atomic-admission-readiness.md`.
+
+Account deletion is retry-safe for the iOS durable deletion journal. A first
+`DELETE /api/v1/auth/me` requires an unexpired signed access token and exact
+`"DELETE"` confirmation. After that subject is absent, the same signed token
+may converge to 204 even if it has since expired; malformed or wrong-signature
+tokens remain generic 401s, and no deletion tombstone is retained. Signing-key
+rotation must retain verification for previously issued access tokens through
+the durable mobile deletion-retry window, or an offline journal can no longer
+prove its deleted subject.
+
 ## iOS app
 
 The app uses SwiftUI, an actor-based API client, Keychain credentials, strict
@@ -212,6 +270,10 @@ dropping stops.
 ```bash
 ./venv/bin/ruff check backend tests scripts
 ./venv/bin/python -m pytest tests -q
+RUN_REAL_INFRA_TESTS=1 \
+  DATABASE_URL=postgresql+asyncpg://itinera:itinera@localhost:5432/itinera \
+  REDIS_URL=redis://localhost:6379/0 \
+  ./venv/bin/python -m pytest -m integration
 python scripts/export_openapi.py --check
 
 cd ios
@@ -220,13 +282,30 @@ xcodebuild -project Itinera.xcodeproj -scheme Itinera \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
-GitHub Actions runs these backend checks and builds/tests the shared `Itinera`
-scheme on an available iPhone simulator. Regenerate the contract after an API
-change with `python scripts/export_openapi.py`.
+GitHub Actions keeps the ordinary backend suite service-free, runs the marked
+integration set separately against PostgreSQL 16 and Redis 7 after an online
+Alembic upgrade, and builds/tests the shared `Itinera` scheme on an available
+iPhone simulator. Regenerate the contract after an API change with
+`python scripts/export_openapi.py`.
 
 ## Deployment
 
 `render.yaml` is a beta blueprint for the API, worker, outbox dispatcher,
-Postgres, and Redis. It runs migrations before deploying the API. The container
+Postgres, and Redis. It runs migrations before deploying the API and routes API
+traffic only while `/readyz` passes. Environment variables are role-scoped:
+the API owns auth/admission configuration, provider credentials exist only on
+the generation worker, and the outbox receives only database, Celery, and
+redispatch controls. Render preserves variables omitted by a later Blueprint,
+so this file is desired state for new services, not proof that stale secrets
+were revoked from an existing service; the P2 runbook requires a name-only
+inventory and explicit deletion. Automatic deploys are disabled for these
+coordinated roles, and the generation switch is operator-owned. The container
 and process boundaries remain portable to a managed container platform and a
 dedicated durable queue as traffic grows.
+
+Before increasing API instance count or
+`ITINERARY_STREAM_DATABASE_POOL_SIZE`, recalculate the PostgreSQL connection
+budget described above and confirm the managed database limit covers the full
+fleet plus headroom. A readiness-successful instance proves it can acquire a
+connection at that moment; it does not reserve capacity for a later stream or
+prove that the fleet cannot exhaust the database connection limit.

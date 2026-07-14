@@ -15,11 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import (
+    DeletionIdentity,
     RefreshTokenError,
     create_access_token,
     create_guest_session,
     create_session_for_user,
     current_user,
+    deletion_identity,
     enforce_guest_session_rate_limit,
     rotate_guest_refresh_token,
 )
@@ -28,12 +30,17 @@ from backend.db.models import User
 from backend.db.repo import delete_user_data
 from backend.db.session import get_session
 from backend.schemas.auth import AppleIdentityRequest, AuthTokenResponse, RefreshTokenRequest
+from backend.schemas.errors import AdmissionErrorResponse
 from backend.schemas.trips import DeleteMyDataRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_ISSUER = "https://appleid.apple.com"
+_RETRY_AFTER_HEADER = {
+    "description": "Whole seconds until the client should retry.",
+    "schema": {"type": "integer", "minimum": 1},
+}
 
 
 def _response(user_id, refresh_token: str) -> AuthTokenResponse:
@@ -52,6 +59,18 @@ def _response(user_id, refresh_token: str) -> AuthTokenResponse:
     response_model=AuthTokenResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(enforce_guest_session_rate_limit)],
+    responses={
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "model": AdmissionErrorResponse,
+            "description": "Guest-session admission limit reached",
+            "headers": {"Retry-After": _RETRY_AFTER_HEADER},
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": AdmissionErrorResponse,
+            "description": "Guest-session admission cannot be evaluated",
+            "headers": {"Retry-After": _RETRY_AFTER_HEADER},
+        },
+    },
 )
 async def create_guest(
     session: AsyncSession = Depends(get_session),
@@ -224,13 +243,33 @@ async def link_apple_identity(
     return response
 
 
-@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_204_NO_CONTENT: {
+            "description": "Account data is absent after deletion or safe replay"
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": (
+                "Bearer token is invalid, or is expired while its account "
+                "still exists"
+            )
+        },
+    },
+)
 async def delete_my_data(
     payload: DeleteMyDataRequest,
-    user: User = Depends(current_user),
+    identity: DeletionIdentity = Depends(deletion_identity),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     del payload  # Pydantic enforces an explicit, exact "DELETE" confirmation.
-    await delete_user_data(session, user=user)
-    await session.commit()
+    if identity.user is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    try:
+        await delete_user_data(session, user=identity.user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -61,6 +61,22 @@ final class GoogleMapsURLBuilderTests: XCTestCase {
         )
     }
 
+    func testOneStopProducesAppSearchURL() throws {
+        let routes = try GoogleMapsURLBuilder.routeSegments(for: [activity(0)])
+        let appURL = try XCTUnwrap(routes[0].appURL)
+        XCTAssertEqual(appURL.scheme, "comgooglemaps")
+        XCTAssertTrue(appURL.absoluteString.contains("q=38.700000,-9.100000"))
+    }
+
+    func testMultiStopProducesAppDirectionsURL() throws {
+        let routes = try GoogleMapsURLBuilder.routeSegments(for: (0..<3).map(activity))
+        let appURL = try XCTUnwrap(routes[0].appURL)
+        XCTAssertEqual(appURL.scheme, "comgooglemaps")
+        XCTAssertTrue(appURL.absoluteString.contains("saddr=38.700000,-9.100000"))
+        XCTAssertTrue(appURL.absoluteString.contains("waypoints=38.701000,-9.101000"))
+        XCTAssertTrue(appURL.absoluteString.contains("daddr=38.702000,-9.102000"))
+    }
+
     func testInvalidCoordinateFailsWithoutCreatingPartialRoute() {
         let invalid = Activity(
             time: "10:00",

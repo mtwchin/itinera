@@ -208,13 +208,18 @@ def test_duplicate_terminal_delivery_does_not_run_pipeline():
         job_id="job-1",
         status=JobStatus.succeeded,
         request={"city": "Lisbon"},
+        version=3,
         result={"itinerary": []},
     )
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline"
     ) as pipeline:
         result = tasks.run_itinerary_pipeline.run(job_id="job-1")
-    assert result["status"] == "succeeded"
+    assert result == {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "version": 3,
+    }
     pipeline.assert_not_called()
 
 
@@ -231,14 +236,19 @@ def test_duplicate_active_delivery_does_not_run_pipeline():
         tasks, "run_pipeline"
     ) as pipeline:
         result = tasks.run_itinerary_pipeline.run(job_id="job-1")
-    assert result["status"] == "running"
+    assert result == {
+        "job_id": "job-1",
+        "status": "running",
+        "version": 1,
+    }
     pipeline.assert_not_called()
 
 
-def test_worker_persists_success_before_terminal_cache_and_publish():
+def test_worker_persists_success_without_storing_a_redis_result():
     from backend.workers import tasks
 
     order: list[str] = []
+    redis_client = MagicMock()
     claim = JobClaim(
         claimed=True,
         job_id="job-1",
@@ -258,21 +268,33 @@ def test_worker_persists_success_before_terminal_cache_and_publish():
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", return_value={"itinerary": {"itinerary": []}}
     ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
-        tasks, "_cache_terminal", side_effect=lambda *_: order.append("cache")
-    ), patch.object(tasks, "_publish", side_effect=publish), patch.object(
-        tasks.redis_sync, "from_url", return_value=MagicMock()
-    ):
+        tasks, "_publish", side_effect=publish
+    ), patch.object(
+        tasks.redis_sync, "from_url", return_value=redis_client
+    ) as redis_factory:
         result = tasks.run_itinerary_pipeline.run(job_id="job-1")
 
-    assert result["status"] == "succeeded"
-    assert order.index("database") < order.index("cache")
+    assert result == {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "version": 1,
+    }
     assert order.index("database") < order.index("publish:succeeded")
+    redis_client.set.assert_not_called()
+    redis_client.eval.assert_not_called()
+    redis_factory.assert_called_once_with(
+        tasks._settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=tasks._settings.redis_operation_timeout_seconds,
+        socket_timeout=tasks._settings.redis_operation_timeout_seconds,
+    )
 
 
-def test_worker_persists_failure_before_terminal_cache_and_publish():
+def test_worker_persists_failure_without_storing_a_redis_result():
     from backend.workers import tasks
 
     order: list[str] = []
+    redis_client = MagicMock()
     claim = JobClaim(
         claimed=True,
         job_id="job-1",
@@ -292,12 +314,22 @@ def test_worker_persists_failure_before_terminal_cache_and_publish():
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", side_effect=RuntimeError("provider failed")
     ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
-        tasks, "_cache_terminal", side_effect=lambda *_: order.append("cache")
-    ), patch.object(tasks, "_publish", side_effect=publish), patch.object(
-        tasks.redis_sync, "from_url", return_value=MagicMock()
+        tasks, "_publish", side_effect=publish
+    ), patch.object(
+        tasks.redis_sync, "from_url", return_value=redis_client
     ):
         with pytest.raises(RuntimeError, match="provider failed"):
             tasks.run_itinerary_pipeline.run(job_id="job-1")
 
-    assert order.index("database") < order.index("cache")
     assert order.index("database") < order.index("publish:failed")
+    redis_client.set.assert_not_called()
+    redis_client.eval.assert_not_called()
+
+
+def test_worker_discards_celery_results_without_a_new_hard_time_limit():
+    from backend.workers import tasks
+
+    assert tasks.run_itinerary_pipeline.ignore_result is True
+    assert tasks.run_itinerary_pipeline.time_limit is None
+    assert tasks.celery_app.conf.task_store_errors_even_if_ignored is False
+    assert tasks.celery_app.conf.result_expires == 24 * 60 * 60

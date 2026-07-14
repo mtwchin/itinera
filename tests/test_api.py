@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +11,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from redis.exceptions import RedisError
 
 from backend.db.models import Itinerary as ItineraryRow
 from backend.db.models import JobStatus, User
@@ -74,6 +72,7 @@ def itinerary_row(
     *,
     job_id: str = "abc",
     status: JobStatus = JobStatus.pending,
+    version: int = 1,
 ) -> ItineraryRow:
     result = sample_itinerary().model_dump(mode="json") if status == JobStatus.succeeded else None
     return ItineraryRow(
@@ -85,6 +84,7 @@ def itinerary_row(
         request_hash="a" * 64,
         idempotency_key="idem-123",
         result=result,
+        version=version,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -94,9 +94,9 @@ def itinerary_row(
 
 def test_simulated_trends_when_no_api_key():
     places = fetch_trending_places("Lisbon", "Portugal", api_key=None)
-    assert len(places) == 10
+    assert len(places) == 25
     assert all(p["city"] == "Lisbon" for p in places)
-    assert {p["type"] for p in places} <= {"landmark", "food", "culture", "nature", "shopping"}
+    assert {p["type"] for p in places} <= {"landmark", "food", "culture", "nature", "shopping", "entertainment"}
 
 
 def test_simulate_shapes():
@@ -129,11 +129,11 @@ def test_pipeline_composes_itinerary_with_configured_composer():
         out = pipeline.run_pipeline(SAMPLE_REQUEST, lambda stage, data: events.append(stage))
 
     assert out["itinerary"]["itinerary"][0]["day"] == 1
-    assert len(out["trending_places"]) == 10
+    assert len(out["trending_places"]) == 25
     assert events == ["trends", "geocode", "compose"]
     composed_request, composed_places = fake_composer.compose.call_args.args
     assert composed_request.city == "Lisbon"
-    assert len(composed_places) == 10
+    assert len(composed_places) == 25
 
 
 def test_pipeline_rejects_anthropic_provider_without_key():
@@ -357,55 +357,32 @@ def test_create_itinerary_requires_bearer_token():
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_status_authorizes_owner_before_reading_redis(authenticated_client):
+def test_status_returns_authoritative_postgres_row(authenticated_client):
     client, session, user = authenticated_client
     row = itinerary_row(user, status=JobStatus.succeeded)
-    result = {
-        "job_id": "abc",
-        "status": "succeeded",
-        "result": sample_itinerary().model_dump(mode="json"),
-        "error": None,
-    }
-    fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(return_value=json.dumps(result))
+    row.result["itinerary"][0]["theme"] = "Database result"
     with patch(
         "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=row,
-    ) as lookup, patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
+    ) as lookup:
         response = client.get("/api/v1/itineraries/abc")
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
+    assert response.json()["version"] == 1
+    assert response.json()["result"]["itinerary"][0]["theme"] == "Database result"
     lookup.assert_awaited_once_with(session, job_id="abc", user_id=user.id)
 
 
-def test_status_hides_another_users_job_without_touching_cache(authenticated_client):
+def test_status_hides_another_users_job(authenticated_client):
     client, _, _ = authenticated_client
-    redis_factory = MagicMock()
     with patch(
         "backend.routers.itineraries.get_itinerary_with_access",
         new_callable=AsyncMock,
         return_value=None,
-    ), patch("backend.routers.itineraries.get_redis", redis_factory):
+    ):
         response = client.get("/api/v1/itineraries/not-mine")
     assert response.status_code == 404
-    redis_factory.assert_not_called()
-
-
-def test_status_falls_back_to_postgres_when_redis_is_unavailable(authenticated_client):
-    client, _, user = authenticated_client
-    row = itinerary_row(user, status=JobStatus.succeeded)
-    fake_redis = MagicMock()
-    fake_redis.get = AsyncMock(side_effect=RedisError("cache unavailable"))
-    with patch(
-        "backend.routers.itineraries.get_itinerary_with_access",
-        new_callable=AsyncMock,
-        return_value=row,
-    ), patch("backend.routers.itineraries.get_redis", return_value=fake_redis):
-        response = client.get("/api/v1/itineraries/abc")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "succeeded"
 
 
 def test_list_is_scoped_to_current_user(authenticated_client):

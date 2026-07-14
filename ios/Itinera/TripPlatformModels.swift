@@ -89,6 +89,12 @@ enum JSONValue: Codable, Hashable, Sendable {
     }
 }
 
+struct AIEditRequest: Encodable, Sendable {
+    let message: String
+    let expectedVersion: Int
+    let day: Int?
+}
+
 struct TripReservation: Codable, Identifiable, Sendable {
     let id: String
     var title: String

@@ -334,10 +334,14 @@ def test_popular_detail_hides_missing_or_inactive_row(catalog_client):
     assert response.status_code == 404
 
 
-def test_put_saved_is_idempotent_and_commits_owned_snapshot(catalog_client):
+def test_put_saved_is_idempotent_without_request_side_terminal_document(
+    catalog_client,
+):
     client, session, user = catalog_client
     public = public_row()
     owned = saved_row(public, user)
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
     with patch(
         "backend.routers.itineraries.save_public_itinerary_for_user",
         new_callable=AsyncMock,
@@ -357,6 +361,7 @@ def test_put_saved_is_idempotent_and_commits_owned_snapshot(catalog_client):
         user_id=user.id,
     )
     session.commit.assert_awaited_once()
+    assert order == ["commit"]
 
 
 def test_popular_routes_require_bearer_authentication():
