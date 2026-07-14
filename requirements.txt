@@ -17,6 +17,7 @@ celery[redis]==5.4.0
 # --- LLM + agents ---
 anthropic>=0.92.0
 openai==2.45.0
+google-genai>=1.0.0
 
 # --- External APIs ---
 googlemaps==4.10.0

@@ -350,10 +350,8 @@ async def _issue_refresh_replacement(
 ) -> tuple[User, str]:
     replacement_id = uuid.uuid4()
     replacement_raw = generate_refresh_token()
-    if mark_source_used:
-        token.used_at = now
-    token.revoked_at = now
-    token.replaced_by_id = replacement_id
+    # Insert the replacement first so the FK reference exists before we update
+    # the source token's replaced_by_id column.
     session.add(
         GuestRefreshToken(
             id=replacement_id,
@@ -363,6 +361,11 @@ async def _issue_refresh_replacement(
             expires_at=now + timedelta(seconds=settings.auth_refresh_token_ttl_seconds),
         )
     )
+    await session.flush()
+    if mark_source_used:
+        token.used_at = now
+    token.revoked_at = now
+    token.replaced_by_id = replacement_id
     await session.flush()
     return user, replacement_raw
 

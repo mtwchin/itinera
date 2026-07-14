@@ -21,6 +21,7 @@ struct ItineraryView: View {
     @State private var currentVersion: Int
     @State private var isShowingEditor = false
     @State private var isShowingTripTools = false
+    @State private var isShowingAIEdit = false
 
     init(
         itinerary: Itinerary,
@@ -139,6 +140,11 @@ struct ItineraryView: View {
                     if tripID != nil {
                         Divider()
                         Button {
+                            isShowingAIEdit = true
+                        } label: {
+                            Label("Ask AI to edit", systemImage: "sparkles")
+                        }
+                        Button {
                             isShowingEditor = true
                         } label: {
                             Label("Edit itinerary", systemImage: "slider.horizontal.3")
@@ -195,6 +201,20 @@ struct ItineraryView: View {
             if let tripID {
                 NavigationStack {
                     TripToolsView(jobID: tripID, tripTitle: resolvedTripTitle)
+                }
+                .environment(\.itineraTheme, theme)
+            }
+        }
+        .sheet(isPresented: $isShowingAIEdit) {
+            if let tripID {
+                AIEditSheet(
+                    jobID: tripID,
+                    currentDay: selectedDay,
+                    dayTheme: day?.theme ?? "",
+                    version: currentVersion
+                ) { revised, version in
+                    itinerary = revised
+                    currentVersion = version
                 }
                 .environment(\.itineraTheme, theme)
             }
@@ -442,6 +462,7 @@ struct ItineraryView: View {
 private struct GoogleMapsExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.openURL) private var openURL
 
     let day: ItineraryDay
 
@@ -471,7 +492,7 @@ private struct GoogleMapsExportSheet: View {
                         case .success(let routes):
                             if routes.count > 1 {
                                 ItineraStatusBanner(
-                                    message: "This day uses \(routes.count) browser-safe routes. Open them in order; each route repeats the handoff stop.",
+                                    message: "This day uses \(routes.count) routes (Google Maps supports up to 5 stops per route). Open them in order; each route repeats the handoff stop.",
                                     kind: .warning
                                 )
                             }
@@ -487,11 +508,19 @@ private struct GoogleMapsExportSheet: View {
                                                 : "\(route.activityNames.count) ordered stops"
                                         )
 
-                                        Link(destination: route.url) {
+                                        Button {
+                                            if let appURL = route.appURL {
+                                                openURL(appURL) { accepted in
+                                                    if !accepted { openURL(route.url) }
+                                                }
+                                            } else {
+                                                openURL(route.url)
+                                            }
+                                        } label: {
                                             Label(route.title, systemImage: "arrow.up.right.square.fill")
                                         }
                                         .buttonStyle(ItineraPrimaryButtonStyle())
-                                        .accessibilityHint("Opens Google Maps or google.com")
+                                        .accessibilityHint("Opens Google Maps app")
                                     }
                                 }
                             }
@@ -529,6 +558,10 @@ struct DayMapView: View {
 
     @State private var cameraPosition: MapCameraPosition = .automatic
 
+    private var hasValidCoordinates: Bool {
+        activities.contains { $0.coordinates.lat != 0.0 || $0.coordinates.lng != 0.0 }
+    }
+
     private var coordinates: [CLLocationCoordinate2D] {
         activities.map {
             CLLocationCoordinate2D(
@@ -539,6 +572,13 @@ struct DayMapView: View {
     }
 
     var body: some View {
+        if !hasValidCoordinates {
+            ContentUnavailableView(
+                "Map unavailable",
+                systemImage: "map.fill",
+                description: Text("Location data isn't available for these stops.")
+            )
+        } else {
         Map(position: $cameraPosition) {
             if !routeLegs.isEmpty {
                 ForEach(routeLegs) { leg in
@@ -604,6 +644,7 @@ struct DayMapView: View {
         }
         .onChange(of: activities) { _, _ in
             cameraPosition = .automatic
+        }
         }
     }
 
@@ -932,6 +973,163 @@ private struct StopMapView: View {
     }
     .environment(\.itineraTheme, .atlas)
     .preferredColorScheme(.light)
+}
+
+private struct AIEditSheet: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.itineraTheme) private var theme
+
+    let jobID: String
+    let currentDay: Int
+    let dayTheme: String
+    let version: Int
+    let onApply: (Itinerary, Int) -> Void
+
+    @State private var message = ""
+    @State private var isWorking = false
+    @State private var errorMessage: String?
+
+    private let suggestions: [(label: String, prompt: String)] = [
+        ("More food stops", "Add more local food spots and dining experiences to the afternoon"),
+        ("Add morning activity", "Add an early morning activity before the first listed stop"),
+        ("More relaxed pace", "Make this day more relaxed — fewer stops, more time at each location"),
+        ("Hidden gems only", "Replace touristy spots with lesser-known local favorites that most visitors miss"),
+        ("Optimize route order", "Reorder the activities to create a smarter route with less backtracking"),
+        ("Add a sunset stop", "Add a scenic viewpoint or rooftop stop timed to catch the sunset"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                ItineraBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        ItineraBrandHeader(
+                            eyebrow: "Day \(currentDay) · AI assistant",
+                            title: "What would you like to change?",
+                            message: "Tap a suggestion to apply it instantly, or describe your own change below."
+                        )
+
+                        if let errorMessage {
+                            ItineraStatusBanner(message: errorMessage, kind: .error)
+                        }
+
+                        ItineraSurface {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ItineraSectionHeading(
+                                    number: "QUICK EDITS",
+                                    title: dayTheme.isEmpty ? "Day \(currentDay)" : dayTheme,
+                                    message: "Tap to apply to the current day"
+                                )
+                                VStack(spacing: 0) {
+                                    ForEach(suggestions, id: \.label) { suggestion in
+                                        Button {
+                                            Task { await submit(suggestion.prompt) }
+                                        } label: {
+                                            HStack {
+                                                Text(suggestion.label)
+                                                    .font(.subheadline)
+                                                    .foregroundStyle(theme.primaryText)
+                                                Spacer()
+                                                if isWorking && message == suggestion.prompt {
+                                                    ProgressView()
+                                                        .scaleEffect(0.8)
+                                                } else {
+                                                    Image(systemName: "chevron.right")
+                                                        .font(.caption)
+                                                        .foregroundStyle(theme.secondaryText)
+                                                }
+                                            }
+                                            .padding(.vertical, 12)
+                                        }
+                                        .disabled(isWorking)
+
+                                        if suggestion.label != suggestions.last?.label {
+                                            Divider()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ItineraSurface {
+                            VStack(alignment: .leading, spacing: 14) {
+                                ItineraSectionHeading(
+                                    number: "CUSTOM",
+                                    title: "Your own request",
+                                    message: "Describe any change in your own words"
+                                )
+                                TextField(
+                                    "e.g. Swap the museum for a rooftop bar at sunset",
+                                    text: $message,
+                                    axis: .vertical
+                                )
+                                .lineLimit(3...6)
+                                .textFieldStyle(.plain)
+                                .font(.subheadline)
+                                .foregroundStyle(theme.primaryText)
+                                .disabled(isWorking)
+
+                                Button {
+                                    Task { await submit(message) }
+                                } label: {
+                                    if isWorking && !suggestions.map(\.prompt).contains(message) {
+                                        HStack {
+                                            ProgressView()
+                                                .scaleEffect(0.85)
+                                                .tint(.white)
+                                            Text("Updating itinerary...")
+                                        }
+                                    } else {
+                                        Label("Apply change", systemImage: "sparkles")
+                                    }
+                                }
+                                .buttonStyle(ItineraPrimaryButtonStyle())
+                                .disabled(isWorking || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                        }
+                    }
+                    .padding(18)
+                    .padding(.bottom, 18)
+                }
+            }
+            .navigationTitle("Ask AI")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isWorking)
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(isWorking)
+    }
+
+    @MainActor
+    private func submit(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isWorking else { return }
+        isWorking = true
+        errorMessage = nil
+        message = text
+        do {
+            let response = try await appState.aiEditTrip(
+                jobID: jobID,
+                message: trimmed,
+                day: currentDay,
+                expectedVersion: version
+            )
+            onApply(response.result, response.toVersion)
+            dismiss()
+        } catch {
+            isWorking = false
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 
 #Preview("Wayfinder · Itinerary") {

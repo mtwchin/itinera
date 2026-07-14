@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
 
-    itinerary_composer_provider: Literal["ollama", "anthropic", "openai"] = "ollama"
+    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq"] = "ollama"
     ollama_base_url: str = "http://localhost:11434/api"
     ollama_model: str = "qwen2.5:7b-instruct"
     ollama_api_key: str | None = None
@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
     openai_request_timeout_seconds: int = Field(default=180, ge=1, le=600)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
     generation_admission_enabled: bool = True
     generation_disabled_retry_after_seconds: int = Field(default=60, ge=1, le=3600)
