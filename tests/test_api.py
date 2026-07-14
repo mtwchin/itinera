@@ -94,9 +94,9 @@ def itinerary_row(
 
 def test_simulated_trends_when_no_api_key():
     places = fetch_trending_places("Lisbon", "Portugal", api_key=None)
-    assert len(places) == 10
+    assert len(places) == 25
     assert all(p["city"] == "Lisbon" for p in places)
-    assert {p["type"] for p in places} <= {"landmark", "food", "culture", "nature", "shopping"}
+    assert {p["type"] for p in places} <= {"landmark", "food", "culture", "nature", "shopping", "entertainment"}
 
 
 def test_simulate_shapes():
@@ -129,11 +129,11 @@ def test_pipeline_composes_itinerary_with_configured_composer():
         out = pipeline.run_pipeline(SAMPLE_REQUEST, lambda stage, data: events.append(stage))
 
     assert out["itinerary"]["itinerary"][0]["day"] == 1
-    assert len(out["trending_places"]) == 10
+    assert len(out["trending_places"]) == 25
     assert events == ["trends", "geocode", "compose"]
     composed_request, composed_places = fake_composer.compose.call_args.args
     assert composed_request.city == "Lisbon"
-    assert len(composed_places) == 10
+    assert len(composed_places) == 25
 
 
 def test_pipeline_rejects_anthropic_provider_without_key():
