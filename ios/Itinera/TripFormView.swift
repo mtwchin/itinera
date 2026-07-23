@@ -5,7 +5,9 @@ struct TripFormView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @Environment(\.itineraTheme) private var theme
-    @AppStorage(ItineraLocalDataKeys.tripDraft) private var savedDraftData = Data()
+    @State private var savedDraftData = Data()
+    @State private var didLoadDraft = false
+    @State private var didEditDraftBeforeLoad = false
 
     @State private var destinationQuery = ""
     @State private var destination: SelectedLocation?
@@ -56,7 +58,7 @@ struct TripFormView: View {
     private var formValid: Bool {
         destination != nil
             && homeBase != nil
-            && departure > arrival
+            && TripDateRangeSelection.isValid(start: arrival, end: departure)
     }
 
     var body: some View {
@@ -122,10 +124,16 @@ struct TripFormView: View {
                         disclosure: .current,
                         hasConsent: settingsPreferences.hasCurrentAIDataConsent,
                         onAccept: {
+                            try await appState.grantAIConsent(
+                                version: AIDataDisclosure.current.version
+                            )
                             settingsPreferences.acceptCurrentAIDataConsent()
                             submit()
                         },
-                        onWithdraw: settingsPreferences.withdrawAIDataConsent
+                        onWithdraw: {
+                            try await appState.withdrawAIConsent()
+                            settingsPreferences.withdrawAIDataConsent()
+                        }
                     )
                 }
                 .environment(\.itineraTheme, theme)
@@ -149,10 +157,27 @@ struct TripFormView: View {
                 clampScheduleDateToTrip()
                 discardScheduleConstraintsOutsideTrip()
             }
-            .onAppear(perform: restoreDraft)
+            .task {
+                let storedDraft = await appState.loadTripDraftData() ?? Data()
+                if !didEditDraftBeforeLoad {
+                    savedDraftData = storedDraft
+                    restoreDraft()
+                }
+                didLoadDraft = true
+                if didEditDraftBeforeLoad,
+                   let encoded = TripDraftCodec.encode(draftSnapshot) {
+                    savedDraftData = encoded
+                    await appState.saveTripDraftData(encoded)
+                }
+            }
             .onChange(of: draftSnapshot) { _, draft in
+                guard didLoadDraft else {
+                    didEditDraftBeforeLoad = true
+                    return
+                }
                 if let encoded = TripDraftCodec.encode(draft) {
                     savedDraftData = encoded
+                    Task { await appState.saveTripDraftData(encoded) }
                 }
             }
         }
@@ -219,6 +244,16 @@ struct TripFormView: View {
                 .fill(theme.border.opacity(0.55))
                 .frame(height: 1)
 
+            HStack(spacing: 0) {
+                formStep("Destination", done: destination != nil)
+                stepConnector(done: destination != nil)
+                formStep("Home base", done: homeBase != nil)
+                stepConnector(done: homeBase != nil)
+                formStep("Dates", done: departure > arrival)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+
             Button(action: requestSubmission) {
                 HStack(spacing: 10) {
                     if isSubmitting {
@@ -237,6 +272,29 @@ struct TripFormView: View {
             .padding(.vertical, 10)
         }
         .background(.ultraThinMaterial)
+    }
+
+    private func formStep(_ label: String, done: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .font(.caption)
+                .foregroundStyle(done ? theme.success : theme.secondaryText.opacity(0.6))
+                .scaleEffect(done ? 1.15 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: done)
+            Text(label)
+                .font(.caption2.weight(done ? .semibold : .regular))
+                .foregroundStyle(done ? theme.primaryText : theme.secondaryText.opacity(0.7))
+        }
+        .animation(.easeInOut(duration: 0.2), value: done)
+    }
+
+    private func stepConnector(done: Bool) -> some View {
+        Rectangle()
+            .fill((done ? theme.success : theme.border).opacity(0.55))
+            .frame(height: 1)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .animation(.easeInOut(duration: 0.25), value: done)
     }
 
     private var primaryActionTitle: String {
@@ -420,24 +478,54 @@ struct TripFormView: View {
                             Text("Budget")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(theme.secondaryText)
-                            Picker("Budget", selection: $budget) {
-                                Text("Low").tag("Low")
-                                Text("Medium").tag("Medium")
-                                Text("High").tag("High")
+                            HStack(spacing: 8) {
+                                ForEach(["Low", "Medium", "High"], id: \.self) { option in
+                                    Button {
+                                        withAnimation(.snappy) { budget = option }
+                                    } label: {
+                                        Text(option)
+                                            .font(.subheadline.weight(budget == option ? .semibold : .regular))
+                                            .foregroundStyle(budget == option ? .white : theme.primaryText)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                budget == option ? theme.accent : theme.accent.opacity(0.09),
+                                                in: Capsule()
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Budget: \(option)")
+                                    .accessibilityAddTraits(budget == option ? .isSelected : [])
+                                }
                             }
-                            .pickerStyle(.segmented)
+                            .sensoryFeedback(.selection, trigger: budget)
                         }
 
                         VStack(alignment: .leading, spacing: 9) {
                             Text("Pace")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(theme.secondaryText)
-                            Picker("Pace", selection: $pace) {
-                                Text("Relaxed").tag("Relaxed")
-                                Text("Balanced").tag("Balanced")
-                                Text("Full").tag("Full")
+                            HStack(spacing: 8) {
+                                ForEach(["Relaxed", "Balanced", "Full"], id: \.self) { option in
+                                    Button {
+                                        withAnimation(.snappy) { pace = option }
+                                    } label: {
+                                        Text(option)
+                                            .font(.subheadline.weight(pace == option ? .semibold : .regular))
+                                            .foregroundStyle(pace == option ? .white : theme.primaryText)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                pace == option ? theme.accent : theme.accent.opacity(0.09),
+                                                in: Capsule()
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Pace: \(option)")
+                                    .accessibilityAddTraits(pace == option ? .isSelected : [])
+                                }
                             }
-                            .pickerStyle(.segmented)
+                            .sensoryFeedback(.selection, trigger: pace)
                         }
 
                         VStack(alignment: .leading, spacing: 9) {
@@ -487,6 +575,8 @@ struct TripFormView: View {
                                                     ? theme.accent
                                                     : theme.secondaryText
                                             )
+                                            .scaleEffect(transportationPreferences.contains(option) ? 1.1 : 1)
+                                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: transportationPreferences.contains(option))
                                         }
                                         .contentShape(Rectangle())
                                         .padding(.vertical, 11)
@@ -650,6 +740,8 @@ struct TripFormView: View {
             }
         }
         .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: isSelected)
+        .sensoryFeedback(.selection, trigger: isSelected)
         .accessibilityLabel(title)
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
@@ -728,14 +820,13 @@ struct TripFormView: View {
                     systemImage: "plus.circle.fill"
                 )
             }
-            .buttonStyle(.borderedProminent)
-            .tint(theme.accent)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(ItineraPrimaryButtonStyle())
 
             if !scheduleConstraints.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(sortedScheduleConstraints) { constraint in
                         scheduleConstraintRow(constraint)
+                            .revealOnAppear()
                     }
                 }
                 .padding(.top, 2)
@@ -1113,7 +1204,7 @@ struct TripFormView: View {
 
 #Preview("Atlas · Plan") {
     TripFormView()
-        .environmentObject(AppState.live())
+        .environmentObject(AppState.preview())
         .environmentObject(SettingsPreferences())
         .environment(\.itineraTheme, .atlas)
         .preferredColorScheme(.light)

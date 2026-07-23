@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,9 +13,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from backend.agents import pipeline
+from backend.ai_consent import CURRENT_AI_CONSENT_VERSION, GRANTED, WITHDRAWN
 from backend.db.models import Itinerary as ItineraryRow
 from backend.db.models import JobStatus, User
 from backend.db.repo import IdempotencyConflictError
+from backend.generation_policy import LEGACY_GENERATION_POLICY_VERSION
 from backend.main import app
 from backend.schemas.itinerary import (
     AccommodationInfo,
@@ -89,6 +93,38 @@ def itinerary_row(
     )
 
 
+def test_health_response_exposes_a_server_generated_support_correlation_id():
+    with TestClient(app) as client:
+        response = client.get("/healthz", headers={"X-Request-ID": "client-value"})
+
+    request_id = response.headers["X-Request-ID"]
+    assert response.status_code == 200
+    assert re.fullmatch(r"[0-9a-f]{32}", request_id)
+    assert request_id != "client-value"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_request_body_limit_rejects_oversized_payloads_with_a_support_id():
+    with TestClient(app) as client:
+        response = client.post("/healthz", content=b"x" * 262_145)
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body is too large."}
+    assert re.fullmatch(r"[0-9a-f]{32}", response.headers["X-Request-ID"])
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_metrics_are_not_exposed_by_default():
+    with TestClient(app) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 404
+
+
 # --- Pipeline / tools ---
 
 
@@ -105,8 +141,6 @@ def test_simulate_shapes():
 
 
 def test_pipeline_composes_itinerary_with_configured_composer():
-    from backend.agents import pipeline
-
     fake_composer = MagicMock()
     fake_composer.compose.return_value = sample_itinerary()
 
@@ -215,12 +249,32 @@ def test_generation_request_rejects_unbounded_or_invalid_input(path, value):
         GenerateItineraryRequest.model_validate(payload)
 
 
-def test_generation_request_allows_thirty_day_trip_and_coordinate_edges():
+def test_generation_request_allows_seven_day_trip_and_coordinate_edges():
     payload = deepcopy(SAMPLE_REQUEST)
-    payload["departure_date"] = "2026-08-31"
+    payload["departure_date"] = "2026-08-08"
     payload["accommodation"]["lat"] = 90
     payload["accommodation"]["lng"] = -180
     assert GenerateItineraryRequest.model_validate(payload).city == "Lisbon"
+
+
+def test_generation_request_rejects_trip_longer_than_beta_cap():
+    payload = deepcopy(SAMPLE_REQUEST)
+    payload["departure_date"] = "2026-08-09"
+
+    with pytest.raises(ValidationError, match="cannot exceed 7 days during the beta"):
+        GenerateItineraryRequest.model_validate(payload)
+
+
+def test_legacy_queued_request_preserves_the_prior_trip_length_contract():
+    payload = deepcopy(SAMPLE_REQUEST)
+    payload["departure_date"] = "2026-08-31"
+
+    request = GenerateItineraryRequest.model_validate(
+        payload,
+        context={"generation_policy_version": LEGACY_GENERATION_POLICY_VERSION},
+    )
+
+    assert request.departure_date.isoformat() == "2026-08-31"
 
 
 # --- API endpoints ---
@@ -232,15 +286,75 @@ def authenticated_client():
     from backend.db.session import get_session
 
     fake_session = AsyncMock()
+    fake_session.add = MagicMock()
     user = User(id=uuid.uuid4())
     app.dependency_overrides[get_session] = lambda: fake_session
     app.dependency_overrides[current_user] = lambda: user
     with patch(
+        "backend.ai_consent.has_current_ai_consent",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
         "backend.routers.itineraries.enforce_generation_rate_limit",
         new_callable=AsyncMock,
     ), TestClient(app) as client:
         yield client, fake_session, user
     app.dependency_overrides.clear()
+
+
+def test_generation_fails_closed_without_server_recorded_ai_consent(authenticated_client):
+    client, _, _ = authenticated_client
+    with patch(
+        "backend.ai_consent.has_current_ai_consent",
+        new_callable=AsyncMock,
+        return_value=False,
+    ), patch(
+        "backend.routers.itineraries.create_or_replay_job", new_callable=AsyncMock
+    ) as create:
+        response = client.post(
+            "/api/v1/itineraries",
+            json=SAMPLE_REQUEST,
+            headers={"Idempotency-Key": "consent-required"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ai_consent_required"
+    create.assert_not_awaited()
+
+
+def test_ai_consent_grant_and_withdrawal_are_audited(authenticated_client):
+    client, session, user = authenticated_client
+    recorded_at = datetime(2026, 7, 16, tzinfo=timezone.utc)
+
+    async def assign_recorded_at() -> None:
+        session.add.call_args.args[0].recorded_at = recorded_at
+
+    session.flush.side_effect = assign_recorded_at
+    grant = client.post(
+        "/api/v1/auth/ai-consent", json={"version": CURRENT_AI_CONSENT_VERSION}
+    )
+    granted = session.add.call_args.args[0]
+    withdrawal = client.delete("/api/v1/auth/ai-consent")
+    withdrawn = session.add.call_args.args[0]
+
+    assert grant.status_code == 200
+    assert grant.json()["action"] == GRANTED
+    assert grant.json()["version"] == CURRENT_AI_CONSENT_VERSION
+    assert withdrawal.status_code == 200
+    assert withdrawal.json()["action"] == WITHDRAWN
+    assert granted.user_id == withdrawn.user_id == user.id
+    assert granted.version == withdrawn.version == CURRENT_AI_CONSENT_VERSION
+    assert session.commit.await_count == 2
+
+
+def test_ai_consent_rejects_a_stale_disclosure_version(authenticated_client):
+    client, session, _ = authenticated_client
+    response = client.post(
+        "/api/v1/auth/ai-consent", json={"version": CURRENT_AI_CONSENT_VERSION - 1}
+    )
+
+    assert response.status_code == 422
+    session.add.assert_not_called()
 
 
 def test_create_itinerary_writes_transactional_job(authenticated_client):

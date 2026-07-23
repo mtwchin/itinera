@@ -221,7 +221,7 @@ def test_expired_access_token_is_rejected():
 
 
 def test_production_rejects_development_signing_secret():
-    settings = Settings(env="prod")
+    settings = Settings(_env_file=None, env="prod")
     with pytest.raises(RuntimeError, match="AUTH_JWT_SECRET"):
         validate_auth_settings(settings)
 

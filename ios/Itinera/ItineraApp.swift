@@ -5,21 +5,95 @@ import UserNotifications
 @main
 struct ItineraApp: App {
     @UIApplicationDelegateAdaptor(ItineraAppDelegate.self) private var appDelegate
-    @StateObject private var appState: AppState
+    @StateObject private var bootstrap: ItineraBootstrap
     @StateObject private var settingsPreferences: SettingsPreferences
 
     init() {
-        _appState = StateObject(wrappedValue: AppState.live())
+        _bootstrap = StateObject(wrappedValue: ItineraBootstrap())
         _settingsPreferences = StateObject(wrappedValue: SettingsPreferences())
     }
 
     var body: some Scene {
         WindowGroup {
-            ItineraRootView(
-                appState: appState,
-                settingsPreferences: settingsPreferences
-            )
+            if let appState = bootstrap.appState {
+                ItineraRootView(
+                    appState: appState,
+                    settingsPreferences: settingsPreferences
+                )
+            } else {
+                StartupConfigurationFailureView(
+                    message: bootstrap.errorMessage
+                )
+            }
         }
+    }
+}
+
+@MainActor
+private final class ItineraBootstrap: ObservableObject {
+    let appState: AppState?
+    let errorMessage: String
+
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ITINERA_FORCE_CONFIGURATION_FAILURE"] == "1" {
+            appState = nil
+            errorMessage = "This build is missing its Itinera service address."
+            return
+        }
+        #endif
+        do {
+            appState = try AppState.live()
+            errorMessage = ""
+        } catch {
+            appState = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct StartupConfigurationFailureView: View {
+    let message: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: ItineraTheme {
+        ItineraTheme.resolved(
+            for: colorScheme,
+            aestheticOverride: ItineraAesthetic.environmentOverride
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            ItineraBackground()
+            VStack(spacing: 18) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(theme.warning)
+                    .accessibilityHidden(true)
+                Text("Itinera isn’t ready to open")
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .foregroundStyle(theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                Text("Install a current copy of Itinera, then try again.")
+                    .font(.subheadline)
+                    .foregroundStyle(theme.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(28)
+            .frame(maxWidth: 420)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: theme.cornerRadius)
+                    .stroke(theme.border.opacity(0.5), lineWidth: 1)
+            }
+            .padding(24)
+            .accessibilityElement(children: .combine)
+        }
+        .environment(\.itineraTheme, theme)
+        .foregroundStyle(theme.primaryText)
     }
 }
 
@@ -77,6 +151,7 @@ struct ContentView: View {
     @EnvironmentObject private var settingsPreferences: SettingsPreferences
     @State private var selectedTab: Tab = .plan
     @State private var deepLinkError: String?
+    @State private var pendingInviteToken: String?
 
     var body: some View {
         #if DEBUG
@@ -118,6 +193,12 @@ struct ContentView: View {
                             try await appState.connectAppleAccount(
                                 identityToken: identityToken
                             )
+                        },
+                        grantAIConsent: { version in
+                            try await appState.grantAIConsent(version: version)
+                        },
+                        withdrawAIConsent: {
+                            try await appState.withdrawAIConsent()
                         }
                     ),
                     showsDoneButton: false
@@ -128,6 +209,7 @@ struct ContentView: View {
         }
         .toolbarBackground(theme.surface.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
+        .sensoryFeedback(.selection, trigger: selectedTab)
         .onOpenURL { url in
             Task { await handleDeepLink(url) }
         }
@@ -142,6 +224,29 @@ struct ContentView: View {
         } message: {
             Text(deepLinkError ?? "The link is invalid or expired.")
         }
+        .confirmationDialog(
+            "Join shared trip?",
+            isPresented: Binding(
+                get: { pendingInviteToken != nil },
+                set: { if !$0 { pendingInviteToken = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Join trip") {
+                Task { await acceptPendingInvite() }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Joining lets the trip owner see you as a collaborator. Review the invitation before continuing.")
+        }
+        #if DEBUG
+        .task {
+            guard let token = ProcessInfo.processInfo.environment[
+                "ITINERA_TEST_INVITE_TOKEN"
+            ], let url = URL(string: "itinera://invite/\(token)") else { return }
+            await handleDeepLink(url)
+        }
+        #endif
     }
 
     @MainActor
@@ -152,20 +257,33 @@ struct ContentView: View {
             selectedTab = .trips
         case "invite":
             let token = url.pathComponents.dropFirst().first ?? ""
-            guard token.count >= 32 else {
+            guard isValidInviteToken(token) else {
                 deepLinkError = "This invitation link is incomplete."
                 return
             }
-            do {
-                _ = try await appState.apiClient.acceptCollaborationInvite(token: token)
-                appState.markLibraryChanged()
-                selectedTab = .trips
-            } catch {
-                deepLinkError = error.localizedDescription
-            }
+            pendingInviteToken = token
         default:
             deepLinkError = "Itinera doesn't recognize this link."
         }
+    }
+
+    private func acceptPendingInvite() async {
+        guard let token = pendingInviteToken else { return }
+        pendingInviteToken = nil
+        do {
+            _ = try await appState.apiClient.acceptCollaborationInvite(token: token)
+            appState.markLibraryChanged()
+            selectedTab = .trips
+        } catch {
+            deepLinkError = error.localizedDescription
+        }
+    }
+
+    private func isValidInviteToken(_ token: String) -> Bool {
+        token.range(
+            of: "^[A-Za-z0-9_-]{32,256}$",
+            options: .regularExpression
+        ) != nil
     }
 
     #if DEBUG

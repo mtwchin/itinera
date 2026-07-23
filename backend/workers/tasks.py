@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 
 import redis as redis_sync
+from celery.exceptions import SoftTimeLimitExceeded
 from loguru import logger
 
 from backend.agents.pipeline import run_pipeline
 from backend.config import get_settings
 from backend.db.models import JobStatus
 from backend.db.repo import claim_job_sync, finish_job_sync, heartbeat_job_sync
+from backend.generation_failures import classify_generation_failure, public_generation_failure
 from backend.itinerary_state import itinerary_stream_channel
 from backend.workers.celery_app import celery_app
 
@@ -29,6 +31,8 @@ def _publish(client: redis_sync.Redis, job_id: str, event: dict) -> None:
     name="itineraries.run_pipeline",
     max_retries=0,
     ignore_result=True,
+    soft_time_limit=_settings.itinerary_job_soft_time_limit_seconds,
+    time_limit=_settings.itinerary_job_time_limit_seconds,
 )
 def run_itinerary_pipeline(
     self,
@@ -70,8 +74,14 @@ def run_itinerary_pipeline(
         _publish(client, job_id, {"type": "progress", "stage": stage, **data})
 
     _publish(client, job_id, {"type": "started", "job_id": job_id})
+    agent_runs: list[dict] = []
     try:
-        output = run_pipeline(claim.request, progress)
+        output = run_pipeline(
+            claim.request,
+            progress,
+            generation_policy_version=claim.generation_policy_version,
+            record_agent_run=agent_runs.append,
+        )
         itinerary = output["itinerary"]
 
         # The database commit happens before the optional Redis notification.
@@ -81,6 +91,7 @@ def run_itinerary_pipeline(
             run_token=claim.run_token,
             status=JobStatus.succeeded,
             result=itinerary,
+            agent_runs=agent_runs,
         )
         if not persisted:
             raise RuntimeError(f"Itinerary job {job_id} lost its execution lease")
@@ -93,17 +104,32 @@ def run_itinerary_pipeline(
         _publish(client, job_id, {"type": "succeeded", "job_id": job_id})
         return result
     except Exception as exc:
-        error = str(exc)[:8000]
+        # The database and client-facing event contain only a stable public
+        # code. Celery's private task logs retain the exception and traceback
+        # for operators without turning provider/configuration details into a
+        # user-visible API contract.
+        failure = (
+            public_generation_failure("generation_unavailable")
+            if isinstance(exc, SoftTimeLimitExceeded)
+            else classify_generation_failure(exc)
+        )
+        logger.opt(exception=exc).error("Itinerary generation failed for job {}", job_id)
         persisted = finish_job_sync(
             job_id=job_id,
             run_token=claim.run_token,
             status=JobStatus.failed,
-            error=error,
+            failure_code=failure.code,
+            agent_runs=agent_runs,
         )
         if persisted:
             _publish(
                 client,
                 job_id,
-                {"type": "failed", "job_id": job_id, "error": error},
+                {
+                    "type": "failed",
+                    "job_id": job_id,
+                    "error": failure.message,
+                    "error_code": failure.code,
+                },
             )
         raise

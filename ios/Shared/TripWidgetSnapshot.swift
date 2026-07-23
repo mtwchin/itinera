@@ -49,11 +49,14 @@ struct TripWidgetSnapshot: Codable, Equatable, Sendable {
 enum TripWidgetSnapshotStore {
     static let appGroupIdentifier = "group.com.itinera.shared"
     private static let snapshotKey = "trip-widget-snapshot-v1"
+    private static let activeSnapshotKey = "trip-widget-active-snapshot-key-v1"
 
     static func load(defaults: UserDefaults? = nil) -> TripWidgetSnapshot? {
         guard
             let defaults = defaults ?? UserDefaults(suiteName: appGroupIdentifier),
-            let data = defaults.data(forKey: snapshotKey),
+            let selectedKey = defaults.string(forKey: activeSnapshotKey),
+            selectedKey.hasPrefix("\(snapshotKey)."),
+            let data = defaults.data(forKey: selectedKey),
             let snapshot = try? JSONDecoder().decode(TripWidgetSnapshot.self, from: data),
             snapshot.schemaVersion == TripWidgetSnapshot.currentSchemaVersion
         else {
@@ -65,6 +68,7 @@ enum TripWidgetSnapshotStore {
     @discardableResult
     static func save(
         _ snapshot: TripWidgetSnapshot,
+        key: String = "\(snapshotKey).default",
         defaults: UserDefaults? = nil
     ) -> Bool {
         guard
@@ -73,12 +77,23 @@ enum TripWidgetSnapshotStore {
         else {
             return false
         }
-        defaults.set(data, forKey: snapshotKey)
+        defaults.set(data, forKey: key)
+        defaults.set(key, forKey: activeSnapshotKey)
         return true
     }
 
-    static func clear(defaults: UserDefaults? = nil) {
-        (defaults ?? UserDefaults(suiteName: appGroupIdentifier))?
-            .removeObject(forKey: snapshotKey)
+    static func clear(key: String? = nil, defaults: UserDefaults? = nil) {
+        guard let defaults = defaults ?? UserDefaults(suiteName: appGroupIdentifier)
+        else { return }
+        let selectedKey = defaults.string(forKey: activeSnapshotKey)
+        let keyToRemove = key ?? selectedKey
+        if let keyToRemove {
+            defaults.removeObject(forKey: keyToRemove)
+        }
+        // Removes pre-P40 state and makes an unselected snapshot unreadable.
+        defaults.removeObject(forKey: snapshotKey)
+        if key == nil || key == selectedKey {
+            defaults.removeObject(forKey: activeSnapshotKey)
+        }
     }
 }

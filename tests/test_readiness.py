@@ -25,7 +25,7 @@ BASE_REGISTRY = [
 
 
 def test_resolve_required_revision_uses_the_single_script_head():
-    assert resolve_required_revision() == "7b2f0d8c4a91"
+    assert resolve_required_revision() == "8b7c90509f1d"
 
 
 @pytest.mark.parametrize("heads", [[], ["one", "two"]])
@@ -372,6 +372,11 @@ def _settings(**overrides):
         "auth_refresh_token_ttl_seconds": 2_592_000,
         "auth_refresh_retry_grace_seconds": 30,
         "apple_sign_in_client_id": None,
+        "itinerary_composer_provider": "openai",
+        "openai_api_key": "provider-secret",
+        "openai_model": "gpt-5.6-luna",
+        "openai_request_timeout_seconds": 90,
+        "itinerary_editor_max_output_tokens": 8_000,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -409,6 +414,19 @@ def test_api_configuration_requires_api_owned_apple_client_id_in_production():
     )
 
     assert result.issues == ("apple_sign_in_client_id",)
+
+
+def test_api_configuration_requires_a_usable_selected_ai_edit_provider_in_production():
+    result = validate_api_configuration(
+        _settings(
+            env="prod",
+            auth_jwt_secret="p" * 32,
+            apple_sign_in_client_id="com.itinera.app",
+            openai_api_key=None,
+        )
+    )
+
+    assert result.issues == ("ai_edit_provider",)
 
 
 def test_api_configuration_validates_stream_lease_operation_margin():

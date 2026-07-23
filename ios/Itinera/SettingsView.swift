@@ -7,6 +7,8 @@ struct SettingsActions: Sendable {
     var privacyPolicyURL: URL?
     var supportURL: URL?
     var connectAppleAccount: (@MainActor @Sendable (String) async throws -> Void)?
+    var grantAIConsent: (@MainActor @Sendable (Int) async throws -> Void)?
+    var withdrawAIConsent: (@MainActor @Sendable () async throws -> Void)?
 
     static let placeholders = SettingsActions()
 }
@@ -61,13 +63,13 @@ struct SettingsView: View {
                         ItineraStatusBanner(message: errorMessage, kind: .error)
                     }
 
-                    appearanceSection
-                    privacySection
-                    accountSection
-                    notificationSection
-                    localDataSection
-                    helpSection
-                    aboutSection
+                    appearanceSection.revealOnAppear()
+                    privacySection.revealOnAppear(delay: 0.06)
+                    accountSection.revealOnAppear(delay: 0.12)
+                    notificationSection.revealOnAppear(delay: 0.18)
+                    localDataSection.revealOnAppear(delay: 0.24)
+                    helpSection.revealOnAppear(delay: 0.30)
+                    aboutSection.revealOnAppear(delay: 0.36)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
@@ -89,8 +91,18 @@ struct SettingsView: View {
                 AIDataDisclosureView(
                     disclosure: .current,
                     hasConsent: preferences.hasCurrentAIDataConsent,
-                    onAccept: preferences.acceptCurrentAIDataConsent,
-                    onWithdraw: preferences.withdrawAIDataConsent
+                    onAccept: {
+                        if let grantAIConsent = actions.grantAIConsent {
+                            try await grantAIConsent(AIDataDisclosure.current.version)
+                        }
+                        preferences.acceptCurrentAIDataConsent()
+                    },
+                    onWithdraw: {
+                        if let withdrawAIConsent = actions.withdrawAIConsent {
+                            try await withdrawAIConsent()
+                        }
+                        preferences.withdrawAIDataConsent()
+                    }
                 )
             }
             .environment(\.itineraTheme, theme)
@@ -117,13 +129,27 @@ struct SettingsView: View {
     private var appearanceSection: some View {
         settingsCard(title: "Appearance", systemImage: "circle.lefthalf.filled") {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Appearance", selection: $preferences.appAppearance) {
+                HStack(spacing: 8) {
                     ForEach(AppAppearance.allCases) { appearance in
-                        Text(appearance.title)
-                            .tag(appearance)
+                        Button {
+                            withAnimation(.snappy) { preferences.appAppearance = appearance }
+                        } label: {
+                            Text(appearance.title)
+                                .font(.subheadline.weight(preferences.appAppearance == appearance ? .semibold : .regular))
+                                .foregroundStyle(preferences.appAppearance == appearance ? .white : theme.primaryText)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(
+                                    preferences.appAppearance == appearance ? theme.accent : theme.accent.opacity(0.09),
+                                    in: Capsule()
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Appearance: \(appearance.title)")
+                        .accessibilityAddTraits(preferences.appAppearance == appearance ? .isSelected : [])
                     }
                 }
-                .pickerStyle(.segmented)
+                .sensoryFeedback(.selection, trigger: preferences.appAppearance)
                 .accessibilityHint("Controls the color appearance throughout Itinera")
 
                 Label(
@@ -163,12 +189,14 @@ struct SettingsView: View {
 
             Divider()
 
-            linkOrPlaceholder(
-                title: "Privacy policy",
-                detail: actions.privacyPolicyURL == nil ? "Publishing before external beta" : nil,
-                systemImage: "doc.text.fill",
-                url: actions.privacyPolicyURL
-            )
+            if let privacyURL = actions.privacyPolicyURL {
+                linkOrPlaceholder(
+                    title: "Privacy policy",
+                    detail: nil,
+                    systemImage: "doc.text.fill",
+                    url: privacyURL
+                )
+            }
         }
     }
 
@@ -209,7 +237,7 @@ struct SettingsView: View {
             title: "Account recovery",
             systemImage: "person.crop.circle.badge.checkmark"
         ) {
-            Text("Sign in with Apple to recover this library on another iPhone. If an existing Apple library is found, Itinera switches to it without deleting this device's offline copy.")
+            Text("Sign in with Apple to recover this library on another iPhone. If an existing Apple library is found, Itinera switches to it and refreshes downloaded trips on this iPhone.")
                 .font(.caption)
                 .foregroundStyle(theme.secondaryText)
 
@@ -224,11 +252,22 @@ struct SettingsView: View {
             } onCompletion: { result in
                 handleAppleAuthorization(result)
             }
-            .signInWithAppleButtonStyle(.black)
+            .signInWithAppleButtonStyle(theme.preferredColorScheme == .dark ? .white : .black)
             .frame(height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(actions.connectAppleAccount == nil)
-            .opacity(actions.connectAppleAccount == nil ? 0.55 : 1)
+            .opacity(actions.connectAppleAccount == nil ? 0.50 : 1)
+            .accessibilityLabel(
+                actions.connectAppleAccount == nil
+                    ? "Sign In with Apple — account recovery not available in this installation"
+                    : "Continue with Apple"
+            )
+
+            if actions.connectAppleAccount == nil {
+                Label("Account recovery is not available in this installation.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText)
+            }
         }
     }
 
@@ -298,10 +337,18 @@ struct SettingsView: View {
     ) -> some View {
         ItineraSurface {
             VStack(alignment: .leading, spacing: 14) {
-                Label(title, systemImage: systemImage)
-                    .font(.headline)
-                    .foregroundStyle(theme.primaryText)
-                    .accessibilityAddTraits(.isHeader)
+                HStack(spacing: 11) {
+                    Image(systemName: systemImage)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(theme.accent)
+                        .frame(width: 30, height: 30)
+                        .background(theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                        .accessibilityHidden(true)
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(theme.primaryText)
+                }
+                .accessibilityAddTraits(.isHeader)
                 content()
             }
         }
@@ -482,8 +529,10 @@ struct AIDataDisclosureView: View {
 
     let disclosure: AIDataDisclosure
     let hasConsent: Bool
-    let onAccept: () -> Void
-    let onWithdraw: () -> Void
+    let onAccept: () async throws -> Void
+    let onWithdraw: () async throws -> Void
+    @State private var isWorking = false
+    @State private var errorMessage: String?
 
     var body: some View {
         ZStack {
@@ -511,16 +560,23 @@ struct AIDataDisclosureView: View {
 
                     if hasConsent {
                         Button("Withdraw consent", role: .destructive) {
-                            onWithdraw()
-                            dismiss()
+                            Task { await withdrawConsent() }
                         }
                         .frame(maxWidth: .infinity, minHeight: 48)
+                        .disabled(isWorking)
                     } else {
                         Button("I understand and agree") {
-                            onAccept()
-                            dismiss()
+                            Task { await acceptConsent() }
                         }
                         .buttonStyle(ItineraPrimaryButtonStyle())
+                        .disabled(isWorking)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(theme.danger)
+                            .accessibilityLabel("Consent update failed: \(errorMessage)")
                     }
 
                     Text("You can change this choice at any time. Withdrawing consent prevents new AI generation; existing trips remain until you delete them.")
@@ -558,6 +614,32 @@ struct AIDataDisclosureView: View {
                         .labelStyle(ItineraDisclosureLabelStyle())
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func acceptConsent() async {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        do {
+            try await onAccept()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func withdrawConsent() async {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        do {
+            try await onWithdraw()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

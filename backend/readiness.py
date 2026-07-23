@@ -273,6 +273,22 @@ def validate_api_configuration(settings: object) -> ConfigurationReadiness:
     if env == "prod" and not _is_nonblank(value("apple_sign_in_client_id")):
         issues.append("apple_sign_in_client_id")
 
+    if env == "prod":
+        provider = value("itinerary_composer_provider")
+        provider_fields = {
+            "anthropic": ("anthropic_api_key", "anthropic_model"),
+            "gemini": ("gemini_api_key", "gemini_model"),
+            "openai": ("openai_api_key", "openai_model"),
+            "groq": ("groq_api_key", "groq_model"),
+        }
+        required = provider_fields.get(provider)
+        if required is None or not all(_is_nonblank(value(field)) for field in required):
+            issues.append("ai_edit_provider")
+        if not _is_positive_number(value("itinerary_editor_max_output_tokens")):
+            issues.append("itinerary_editor_max_output_tokens")
+        if not _is_positive_number(value("openai_request_timeout_seconds")):
+            issues.append("openai_request_timeout_seconds")
+
     positive_fields = (
         "redis_operation_timeout_seconds",
         "readiness_check_timeout_seconds",

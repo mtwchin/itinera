@@ -64,6 +64,16 @@ enum APIError: LocalizedError, Equatable, Sendable {
         }
         return false
     }
+
+    var requiresIdentityRecovery: Bool {
+        if case .authenticationFailed = self { return true }
+        return false
+    }
+}
+
+enum AppleAccountConnectionOutcome: Sendable, Equatable {
+    case linked
+    case recoveredExistingLibrary
 }
 
 struct JobPollingPolicy: Sendable, Equatable {
@@ -85,8 +95,54 @@ struct JobPollingPolicy: Sendable, Equatable {
     }
 }
 
+struct JobStreamingPolicy: Sendable, Equatable {
+    /// Each connection is resource-bounded to two minutes; two attempts leave
+    /// most of the ten-minute generation budget for the polling fallback.
+    var maximumConnections = 2
+}
+
+struct ItinerarySSEEventDecoder {
+    private let decoder: JSONDecoder
+    private var eventName: String?
+    private var dataLines: [String] = []
+
+    init() {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = decoder
+    }
+
+    mutating func consume(line: String) throws -> JobStatusResponse? {
+        guard !line.isEmpty else {
+            defer {
+                eventName = nil
+                dataLines.removeAll(keepingCapacity: true)
+            }
+            guard eventName == "status" || eventName == "result",
+                  !dataLines.isEmpty
+            else { return nil }
+            return try decoder.decode(
+                JobStatusResponse.self,
+                from: Data(dataLines.joined(separator: "\n").utf8)
+            )
+        }
+        if line.hasPrefix(":") { return nil }
+        if line.hasPrefix("event:") {
+            eventName = String(line.dropFirst("event:".count))
+                .trimmingCharacters(in: .whitespaces)
+        } else if line.hasPrefix("data:") {
+            dataLines.append(
+                String(line.dropFirst("data:".count))
+                    .trimmingCharacters(in: .whitespaces)
+            )
+        }
+        return nil
+    }
+}
+
 actor APIClient {
     private struct TokenResponse: Decodable, Sendable {
+        let userID: String
         let accessToken: String
         let refreshToken: String?
         let tokenType: String
@@ -101,6 +157,10 @@ actor APIClient {
         let identityToken: String
     }
 
+    private struct AIConsentRequest: Encodable, Sendable {
+        let version: Int
+    }
+
     private struct ServerErrorDetails: Sendable {
         let code: String?
         let message: String
@@ -108,6 +168,7 @@ actor APIClient {
 
     private let configuration: APIConfiguration
     private let session: URLSession
+    private let streamSession: URLSession
     private let credentialStore: any CredentialStoring
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
@@ -122,6 +183,13 @@ actor APIClient {
     ) {
         self.configuration = configuration
         self.session = session
+        let streamConfiguration = session.configuration
+        streamConfiguration.timeoutIntervalForResource = 120
+        streamConfiguration.timeoutIntervalForRequest = max(
+            configuration.requestTimeout,
+            30
+        )
+        self.streamSession = URLSession(configuration: streamConfiguration)
         self.credentialStore = credentialStore
         self.now = now
 
@@ -144,6 +212,21 @@ actor APIClient {
             body: encoder.encode(payload),
             additionalHeaders: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()],
             as: JobAccepted.self
+        )
+    }
+
+    func grantAIConsent(version: Int) async throws {
+        try await sendWithoutResponse(
+            path: "/api/v1/auth/ai-consent",
+            method: "POST",
+            body: encoder.encode(AIConsentRequest(version: version))
+        )
+    }
+
+    func withdrawAIConsent() async throws {
+        try await sendWithoutResponse(
+            path: "/api/v1/auth/ai-consent",
+            method: "DELETE"
         )
     }
 
@@ -295,17 +378,38 @@ actor APIClient {
     }
 
     func deleteMyData() async throws {
-        try await sendWithoutResponse(
+        try await sendDeletionRequest(
             path: "/api/v1/auth/me",
             method: "DELETE",
             body: encoder.encode(["confirmation": "DELETE"])
         )
-        try await credentialStore.clearCredentials()
     }
 
-    func connectAppleAccount(identityToken: String) async throws {
+    /// Returns the stable server principal before the caller reads or writes
+    /// principal-scoped device state. Legacy credentials are refreshed once to
+    /// enrich them with the now-required `user_id` contract.
+    func ensurePrincipalID() async throws -> String {
+        let credentials = try await credentialsForRequest()
+        if let userID = credentials.userID { return userID }
+        let refreshed = try await refreshCredentials(current: credentials)
+        guard let userID = refreshed.userID else {
+            throw APIError.authenticationFailed(
+                "Your session needs recovery before private trips can be opened."
+            )
+        }
+        return userID
+    }
+
+    /// Finalizes a server-confirmed deletion only after device-local cleanup
+    /// has completed, leaving a safe replay credential if that cleanup fails.
+    func finalizeDeletedAccountOnDevice() async throws {
+        try await credentialStore.clearAccountState()
+    }
+
+    func connectAppleAccount(identityToken: String) async throws -> AppleAccountConnectionOutcome {
         let body = try encoder.encode(AppleIdentityRequest(identityToken: identityToken))
         let response: TokenResponse
+        let outcome: AppleAccountConnectionOutcome
         do {
             response = try await send(
                 path: "/api/v1/auth/apple/link",
@@ -313,15 +417,21 @@ actor APIClient {
                 body: body,
                 as: TokenResponse.self
             )
-        } catch APIError.http(let statusCode, _, _, _) where statusCode == 409 {
+            outcome = .linked
+        } catch APIError.http(
+            let statusCode,
+            let code,
+            _,
+            _
+        ) where statusCode == 409 && code == "apple_account_exists" {
             let installationID = try await credentialStore.installationIdentifier()
             response = try await sendAuthenticationRequest(
                 path: "/api/v1/auth/apple",
                 body: body,
                 installationID: installationID
             )
+            outcome = .recoveredExistingLibrary
         }
-
         guard let refreshToken = response.refreshToken, !refreshToken.isEmpty else {
             throw APIError.authenticationFailed("Apple sign-in did not return a recoverable session.")
         }
@@ -330,9 +440,11 @@ actor APIClient {
                 accessToken: response.accessToken,
                 refreshToken: refreshToken,
                 tokenType: response.tokenType,
-                expiresAt: now().addingTimeInterval(response.expiresIn)
+                expiresAt: now().addingTimeInterval(response.expiresIn),
+                userID: try resolvedUserID(from: response)
             )
         )
+        return outcome
     }
 
     func popularItineraries() async throws -> [PopularItinerarySummary] {
@@ -359,9 +471,33 @@ actor APIClient {
 
     func awaitItinerary(
         _ jobID: String,
-        policy: JobPollingPolicy = JobPollingPolicy()
+        policy: JobPollingPolicy = JobPollingPolicy(),
+        streamingPolicy: JobStreamingPolicy = JobStreamingPolicy()
     ) async throws -> Itinerary {
         let deadline = now().addingTimeInterval(policy.timeout)
+        for _ in 0..<max(0, streamingPolicy.maximumConnections) {
+            guard now() < deadline else { break }
+            do {
+                if let status = try await streamTerminalStatus(jobID) {
+                    return try itinerary(from: status)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as APIError where error == .unauthorized {
+                throw error
+            } catch {
+                // A bounded stream is a latency optimization. The status
+                // endpoint remains authoritative when it closes or fails.
+            }
+        }
+        return try await pollItinerary(jobID, policy: policy, deadline: deadline)
+    }
+
+    private func pollItinerary(
+        _ jobID: String,
+        policy: JobPollingPolicy,
+        deadline: Date
+    ) async throws -> Itinerary {
         var attempt = 0
 
         while now() < deadline {
@@ -369,22 +505,8 @@ actor APIClient {
 
             do {
                 let status = try await jobStatus(jobID)
-                switch status.status {
-                case .succeeded:
-                    guard let itinerary = status.result else {
-                        throw APIError.generationFailed(
-                            code: "missing_result",
-                            message: "The trip finished without an itinerary. Please generate it again."
-                        )
-                    }
-                    return itinerary
-                case .failed:
-                    throw APIError.generationFailed(
-                        code: "generation_failed",
-                        message: status.error ?? "Itinerary generation failed."
-                    )
-                case .pending, .running:
-                    break
+                if status.status == .succeeded || status.status == .failed {
+                    return try itinerary(from: status)
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -401,6 +523,84 @@ actor APIClient {
         }
 
         throw APIError.pollingTimedOut(jobID: jobID)
+    }
+
+    private func itinerary(from status: JobStatusResponse) throws -> Itinerary {
+        switch status.status {
+        case .succeeded:
+            guard let itinerary = status.result else {
+                throw APIError.generationFailed(
+                    code: "missing_result",
+                    message: "The trip finished without an itinerary. Please generate it again."
+                )
+            }
+            return itinerary
+        case .failed:
+            throw APIError.generationFailed(
+                code: status.errorCode ?? "generation_failed",
+                message: status.error ?? "Itinerary generation failed."
+            )
+        case .pending, .running:
+            throw APIError.invalidResponse
+        }
+    }
+
+    private func streamTerminalStatus(
+        _ jobID: String
+    ) async throws -> JobStatusResponse? {
+        var credentials = try await credentialsForRequest()
+        var request = try await makeRequest(
+            path: "/api/v1/itineraries/\(jobID)/stream",
+            method: "GET",
+            body: nil,
+            bearerToken: credentials.accessToken,
+            additionalHeaders: ["Accept": "text/event-stream"]
+        )
+        var opened = try await streamSession.bytes(for: request)
+        var response = try streamHTTPResponse(opened.1)
+        if response.statusCode == 401 {
+            credentials = try await refreshCredentials(current: credentials)
+            request.setValue(
+                "Bearer \(credentials.accessToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            opened = try await streamSession.bytes(for: request)
+            response = try streamHTTPResponse(opened.1)
+            if response.statusCode == 401 { throw APIError.unauthorized }
+        }
+        try validateStreamResponse(response)
+
+        var decoder = ItinerarySSEEventDecoder()
+        for try await line in opened.0.lines {
+            try Task.checkCancellation()
+            if let status = try decoder.consume(line: line),
+               status.status == .succeeded || status.status == .failed {
+                return status
+            }
+        }
+        return nil
+    }
+
+    private func streamHTTPResponse(_ response: URLResponse) throws -> HTTPURLResponse {
+        guard let response = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+        return response
+    }
+
+    private func validateStreamResponse(_ response: HTTPURLResponse) throws {
+        guard (200..<300).contains(response.statusCode) else {
+            throw APIError.http(
+                statusCode: response.statusCode,
+                code: nil,
+                message: Self.defaultMessage(for: response.statusCode),
+                retryAfter: response.value(forHTTPHeaderField: "Retry-After")
+                    .flatMap(TimeInterval.init)
+            )
+        }
+        guard response.value(forHTTPHeaderField: "Content-Type")?
+            .localizedCaseInsensitiveContains("text/event-stream") == true
+        else { throw APIError.invalidResponse }
     }
 
     private func send<Response: Decodable & Sendable>(
@@ -467,6 +667,46 @@ actor APIClient {
         try validate(response: response, data: data)
     }
 
+    /// Account deletion has an intentionally idempotent backend contract. It
+    /// must not create a new guest identity while replaying a deletion after a
+    /// prior server-side success, so it bypasses the normal auth refresh path.
+    private func sendDeletionRequest(
+        path: String,
+        method: String,
+        body: Data?
+    ) async throws {
+        let credentials: AuthCredentials
+        do {
+            guard let stored = try await credentialStore.loadCredentials() else {
+                throw APIError.unauthorized
+            }
+            credentials = stored
+        } catch KeychainError.invalidData {
+            try await credentialStore.clearCredentials()
+            throw APIError.unauthorized
+        }
+        var request = try await makeRequest(
+            path: path,
+            method: method,
+            body: body,
+            bearerToken: credentials.accessToken,
+            additionalHeaders: [:]
+        )
+        var (data, response) = try await perform(request)
+        if response.statusCode == 401 {
+            let refreshed = try await refreshCredentials(current: credentials)
+            request.setValue(
+                "Bearer \(refreshed.accessToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            (data, response) = try await perform(request)
+            if response.statusCode == 401 {
+                throw APIError.unauthorized
+            }
+        }
+        try validate(response: response, data: data)
+    }
+
     private func credentialsForRequest() async throws -> AuthCredentials {
         if let authenticationTask {
             return try await authenticationTask.value
@@ -512,7 +752,8 @@ actor APIClient {
             accessToken: response.accessToken,
             refreshToken: refreshToken,
             tokenType: response.tokenType,
-            expiresAt: now().addingTimeInterval(response.expiresIn)
+            expiresAt: now().addingTimeInterval(response.expiresIn),
+            userID: try resolvedUserID(from: response)
         )
         try await credentialStore.saveCredentials(credentials)
         return credentials
@@ -554,17 +795,47 @@ actor APIClient {
                 installationID: installationID
             )
         } catch APIError.unauthorized {
-            try await credentialStore.clearCredentials()
-            return try await performCreateGuestCredentials()
+            // A rejected refresh can mean this device still owns a library
+            // that needs explicit recovery. Never hide it behind a silently
+            // created guest account.
+            throw APIError.authenticationFailed(
+                "Your session needs recovery. Your saved trips remain on this device."
+            )
+        }
+        guard let refreshToken = response.refreshToken, !refreshToken.isEmpty else {
+            throw APIError.authenticationFailed(
+                "The server did not refresh this account session."
+            )
         }
         let credentials = AuthCredentials(
             accessToken: response.accessToken,
-            refreshToken: response.refreshToken ?? current.refreshToken,
+            refreshToken: refreshToken,
             tokenType: response.tokenType,
-            expiresAt: now().addingTimeInterval(response.expiresIn)
+            expiresAt: now().addingTimeInterval(response.expiresIn),
+            userID: try resolvedUserID(
+                from: response,
+                existingUserID: current.userID
+            )
         )
         try await credentialStore.saveCredentials(credentials)
         return credentials
+    }
+
+    private func resolvedUserID(
+        from response: TokenResponse,
+        existingUserID: String? = nil
+    ) throws -> String? {
+        guard let userID = UUID(uuidString: response.userID) else {
+            throw APIError.decoding
+        }
+        let normalizedUserID = userID.uuidString.lowercased()
+        if let existingUserID,
+           existingUserID.lowercased() != normalizedUserID {
+            throw APIError.authenticationFailed(
+                "Your account identity changed during session refresh. Please recover your library."
+            )
+        }
+        return normalizedUserID
     }
 
     private func sendAuthenticationRequest<Response: Decodable & Sendable>(
@@ -675,7 +946,10 @@ actor APIClient {
             throw APIError.http(
                 statusCode: response.statusCode,
                 code: details.code,
-                message: details.message,
+                message: Self.messageWithSupportReference(
+                    details.message,
+                    response.value(forHTTPHeaderField: "X-Request-ID")
+                ),
                 retryAfter: retryAfter
             )
         }
@@ -722,6 +996,19 @@ actor APIClient {
         case 500...599: return "Itinera is temporarily unavailable. Please try again."
         default: return "The request failed (\(statusCode))."
         }
+    }
+
+    private static func messageWithSupportReference(
+        _ message: String,
+        _ requestID: String?
+    ) -> String {
+        guard let requestID,
+              requestID.count == 32,
+              requestID.allSatisfy({ $0.isASCII && $0.isHexDigit })
+        else {
+            return message
+        }
+        return "\(message) Reference ID: \(requestID.lowercased())."
     }
 
     private static func transportMessage(for code: URLError.Code) -> String {

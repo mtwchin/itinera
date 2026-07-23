@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 
 struct TripDateRangeSelection: Equatable, Sendable {
+    static let maximumTripNights = 7
+
     enum Phase: Equatable, Sendable {
         case empty
         case choosingEnd
@@ -21,6 +23,10 @@ struct TripDateRangeSelection: Equatable, Sendable {
     init(start: Date? = nil, end: Date? = nil, calendar: Calendar = .current) {
         self.start = start.map(calendar.startOfDay(for:))
         self.end = end.map(calendar.startOfDay(for:))
+        if let start = self.start, let end = self.end,
+           !Self.isValid(start: start, end: end, calendar: calendar) {
+            self.end = nil
+        }
     }
 
     var phase: Phase {
@@ -49,7 +55,11 @@ struct TripDateRangeSelection: Equatable, Sendable {
             return .selectedStart
         }
 
-        guard let latest = calendar.date(byAdding: .day, value: 30, to: start),
+        guard let latest = calendar.date(
+            byAdding: .day,
+            value: Self.maximumTripNights,
+            to: start
+        ),
               day <= latest else {
             return .rejectedTooLong
         }
@@ -71,6 +81,15 @@ struct TripDateRangeSelection: Equatable, Sendable {
             cursor = next
         }
         return result
+    }
+
+    static func isValid(start: Date, end: Date, calendar: Calendar = .current) -> Bool {
+        let normalizedStart = calendar.startOfDay(for: start)
+        let normalizedEnd = calendar.startOfDay(for: end)
+        let nights = calendar.dateComponents(
+            [.day], from: normalizedStart, to: normalizedEnd
+        ).day ?? 0
+        return nights >= 1 && nights <= maximumTripNights
     }
 }
 
@@ -101,9 +120,13 @@ struct TripDateRangePickerSheet: View {
                     Text(instructionTitle)
                         .font(.headline)
                         .foregroundStyle(theme.primaryText)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: draft.phase)
                     Text(rangeDescription)
                         .font(.subheadline)
                         .foregroundStyle(theme.secondaryText)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: draft.phase)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -131,11 +154,12 @@ struct TripDateRangePickerSheet: View {
                 .buttonStyle(ItineraPrimaryButtonStyle())
                 .disabled(draft.phase != .complete)
                 .opacity(draft.phase == .complete ? 1 : 0.48)
+                .animation(.easeInOut(duration: 0.25), value: draft.phase == .complete)
 
                 Spacer(minLength: 0)
             }
             .padding(18)
-            .background(theme.canvas.ignoresSafeArea())
+            .background(ItineraBackground())
             .navigationTitle("Trip dates")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -156,7 +180,7 @@ struct TripDateRangePickerSheet: View {
 
     private var rangeDescription: String {
         guard let start = draft.start else {
-            return "Choose today or later. Trips can be up to 30 days."
+            return "Choose today or later. Beta trips can be up to 7 days."
         }
         guard let end = draft.end else {
             return "Arrive \(start.formatted(date: .abbreviated, time: .omitted))"
@@ -186,7 +210,7 @@ struct TripDateRangePickerSheet: View {
         case .rejectedPast:
             message = "Choose today or a future date."
         case .rejectedTooLong:
-            message = "Trips can be no longer than 30 days. Choose an earlier departure."
+            message = "Beta trips can be no longer than 7 days. Choose an earlier departure."
         }
 
         let normalized = draft.selectedDateComponents()

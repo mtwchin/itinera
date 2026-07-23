@@ -50,15 +50,31 @@ actor CompletedTripCache {
     }
 
     static func live() -> CompletedTripCache {
-        let root = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let root = storageRoot()
         return CompletedTripCache(
             fileURL: root
                 .appending(path: "Itinera", directoryHint: .isDirectory)
                 .appending(path: "completed-trips-v1.json")
         )
+    }
+
+    static func live(
+        scope: LocalPrincipalScope,
+        root: URL? = nil
+    ) -> CompletedTripCache {
+        CompletedTripCache(
+            fileURL: scope.fileURL(
+                root: root ?? storageRoot(),
+                name: "completed-trips-v1.json"
+            )
+        )
+    }
+
+    private static func storageRoot() -> URL {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
     }
 
     func load() throws -> CompletedTripCacheSnapshot? {

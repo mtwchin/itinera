@@ -6,6 +6,23 @@ struct AuthCredentials: Codable, Equatable, Sendable {
     let refreshToken: String
     let tokenType: String
     let expiresAt: Date
+    /// Optional for backward-compatible decoding of credentials saved before
+    /// the client persisted the server's stable principal identifier.
+    let userID: String?
+
+    init(
+        accessToken: String,
+        refreshToken: String,
+        tokenType: String,
+        expiresAt: Date,
+        userID: String? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.tokenType = tokenType
+        self.expiresAt = expiresAt
+        self.userID = userID
+    }
 
     func isExpired(at date: Date, leeway: TimeInterval = 30) -> Bool {
         expiresAt <= date.addingTimeInterval(leeway)
@@ -16,6 +33,8 @@ protocol CredentialStoring: Sendable {
     func loadCredentials() async throws -> AuthCredentials?
     func saveCredentials(_ credentials: AuthCredentials) async throws
     func clearCredentials() async throws
+    /// Removes all account-linkable client state after a confirmed deletion.
+    func clearAccountState() async throws
     func installationIdentifier() async throws -> String
 }
 
@@ -64,6 +83,14 @@ actor KeychainCredentialStore: CredentialStoring {
 
     func clearCredentials() throws {
         try delete(account: Account.credentials)
+    }
+
+    func clearAccountState() throws {
+        // Delete the pseudonymous identifier first. If that fails, retain the
+        // deletion replay credential; there is no operation after deleting
+        // credentials that can safely recover it.
+        try delete(account: Account.installationID)
+        try clearCredentials()
     }
 
     func installationIdentifier() throws -> String {

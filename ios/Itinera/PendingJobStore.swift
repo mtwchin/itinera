@@ -25,13 +25,31 @@ actor PendingJobStore {
     }
 
     static func live() -> PendingJobStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let root = storageRoot()
         return PendingJobStore(
             fileURL: root
                 .appending(path: "Itinera", directoryHint: .isDirectory)
                 .appending(path: "pending-jobs.json")
         )
+    }
+
+    static func live(
+        scope: LocalPrincipalScope,
+        root: URL? = nil
+    ) -> PendingJobStore {
+        PendingJobStore(
+            fileURL: scope.fileURL(
+                root: root ?? storageRoot(),
+                name: "pending-jobs.json"
+            )
+        )
+    }
+
+    private static func storageRoot() -> URL {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
     }
 
     func all() throws -> [PendingJobRecord] {
@@ -115,13 +133,31 @@ actor PendingSubmissionStore {
     }
 
     static func live() -> PendingSubmissionStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let root = storageRoot()
         return PendingSubmissionStore(
             fileURL: root
                 .appending(path: "Itinera", directoryHint: .isDirectory)
                 .appending(path: "pending-submissions.json")
         )
+    }
+
+    static func live(
+        scope: LocalPrincipalScope,
+        root: URL? = nil
+    ) -> PendingSubmissionStore {
+        PendingSubmissionStore(
+            fileURL: scope.fileURL(
+                root: root ?? storageRoot(),
+                name: "pending-submissions.json"
+            )
+        )
+    }
+
+    private static func storageRoot() -> URL {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
     }
 
     func all() throws -> [PendingSubmissionRecord] {

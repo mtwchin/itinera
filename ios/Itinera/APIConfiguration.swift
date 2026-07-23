@@ -1,5 +1,19 @@
 import Foundation
 
+enum APIConfigurationError: LocalizedError, Equatable, Sendable {
+    case missingBaseURL
+    case invalidBaseURL
+
+    var errorDescription: String? {
+        switch self {
+        case .missingBaseURL:
+            "This build is missing its Itinera service address."
+        case .invalidBaseURL:
+            "This build has an invalid Itinera service address."
+        }
+    }
+}
+
 struct APIConfiguration: Sendable {
     static let infoPlistKey = "ItineraAPIBaseURL"
     static let debugEnvironmentKey = "ITINERA_API_BASE_URL"
@@ -21,7 +35,7 @@ struct APIConfiguration: Sendable {
     static func live(
         bundle: Bundle = .main,
         environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> APIConfiguration {
+    ) throws -> APIConfiguration {
         #if DEBUG
         if let override = environment[debugEnvironmentKey],
            let url = validatedURL(override, allowsInsecureLocalhost: true) {
@@ -29,9 +43,24 @@ struct APIConfiguration: Sendable {
         }
         #endif
 
-        guard let rawValue = bundle.object(forInfoDictionaryKey: infoPlistKey) as? String,
-              let url = validatedURL(rawValue, allowsInsecureLocalhost: _isDebugAssertConfiguration()) else {
-            preconditionFailure("Missing or invalid \(infoPlistKey) in Info.plist")
+        return try configured(
+            baseURLValue: bundle.object(forInfoDictionaryKey: infoPlistKey) as? String,
+            allowsInsecureLocalhost: _isDebugAssertConfiguration()
+        )
+    }
+
+    static func configured(
+        baseURLValue: String?,
+        allowsInsecureLocalhost: Bool
+    ) throws -> APIConfiguration {
+        guard let baseURLValue else {
+            throw APIConfigurationError.missingBaseURL
+        }
+        guard let url = validatedURL(
+            baseURLValue,
+            allowsInsecureLocalhost: allowsInsecureLocalhost
+        ) else {
+            throw APIConfigurationError.invalidBaseURL
         }
         return APIConfiguration(baseURL: url)
     }

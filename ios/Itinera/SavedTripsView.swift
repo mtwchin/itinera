@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct SavedTripsView: View {
+    private typealias LibrarySection = (
+        group: TripLibraryGroup,
+        trips: [SavedItinerary]
+    )
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
 
@@ -32,10 +37,7 @@ struct SavedTripsView: View {
         !trips.isEmpty || !localOnlyPendingJobs.isEmpty
     }
 
-    private var libraryGroups: [(
-        group: TripLibraryGroup,
-        trips: [SavedItinerary]
-    )] {
+    private var libraryGroups: [LibrarySection] {
         TripLibraryOrganizer.groups(
             for: trips,
             searchText: searchText
@@ -68,9 +70,11 @@ struct SavedTripsView: View {
 
                         if !hasTrips && !isLoading {
                             emptyState
+                                .revealOnAppear()
                         } else {
                             if searchText.isEmpty, let activeTrip {
                                 todayCard(for: activeTrip)
+                                    .revealOnAppear()
                             }
 
                             if !localOnlyPendingJobs.isEmpty {
@@ -89,6 +93,19 @@ struct SavedTripsView: View {
                                         }
                                     }
                                     .buttonStyle(.plain)
+                                    .revealOnAppear()
+                                }
+                            }
+
+                            if isLoading && trips.isEmpty {
+                                ItineraSectionHeading(
+                                    number: "LOADING",
+                                    title: "Your trips",
+                                    message: nil
+                                )
+                                ForEach(0..<3, id: \.self) { i in
+                                    ItineraSkeletonRow()
+                                        .opacity(1 - Double(i) * 0.18)
                                 }
                             }
 
@@ -101,15 +118,7 @@ struct SavedTripsView: View {
                             }
 
                             ForEach(libraryGroups, id: \.group) { section in
-                                ItineraSectionHeading(
-                                    number: section.group.eyebrow,
-                                    title: section.group.title,
-                                    message: sectionMessage(for: section.group)
-                                )
-
-                                ForEach(section.trips) { trip in
-                                    libraryRow(for: trip)
-                                }
+                                librarySection(section)
                             }
                         }
                     }
@@ -118,13 +127,6 @@ struct SavedTripsView: View {
                     .padding(.bottom, 36)
                 }
                 .refreshable { await load() }
-
-                if isLoading && !hasTrips {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(theme.route)
-                        .accessibilityLabel("Loading trips")
-                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -262,6 +264,7 @@ struct SavedTripsView: View {
         }
         .opacity(mutatingTripIDs.contains(trip.jobId) ? 0.55 : 1)
         .allowsHitTesting(!mutatingTripIDs.contains(trip.jobId))
+        .revealOnAppear()
     }
 
     private func rename(_ trip: SavedItinerary, title: String) async {
@@ -356,6 +359,19 @@ struct SavedTripsView: View {
         }
     }
 
+    @ViewBuilder
+    private func librarySection(_ section: LibrarySection) -> some View {
+        ItineraSectionHeading(
+            number: section.group.eyebrow,
+            title: section.group.title,
+            message: sectionMessage(for: section.group)
+        )
+
+        ForEach(section.trips) { trip in
+            libraryRow(for: trip)
+        }
+    }
+
     private func todayCard(for trip: SavedItinerary) -> some View {
         NavigationLink {
             TodayTripView(
@@ -363,33 +379,7 @@ struct SavedTripsView: View {
                 progressStore: appState.tripProgressStore
             )
         } label: {
-            ItineraSurface {
-                HStack(spacing: 15) {
-                    Image(systemName: "location.fill.viewfinder")
-                        .font(.system(size: 25, weight: .semibold))
-                        .foregroundStyle(theme.accentContrast)
-                        .frame(width: 52, height: 52)
-                        .background(theme.accent, in: Circle())
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("TODAY")
-                            .font(.caption.weight(.bold))
-                            .tracking(1.5)
-                            .foregroundStyle(theme.highlightStrong)
-                        Text("Continue \(trip.displayTitle)")
-                            .font(.system(.title3, design: .serif, weight: .bold))
-                            .foregroundStyle(theme.primaryText)
-                        Text("Next stop, directions, and day progress")
-                            .font(.caption)
-                            .foregroundStyle(theme.secondaryText)
-                    }
-
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(theme.secondaryText)
-                }
-            }
+            TodayTripCard(trip: trip)
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens today's trip guide")
@@ -487,33 +477,100 @@ struct SavedTripsView: View {
     }
 }
 
+private struct TodayTripCard: View {
+    @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let trip: SavedItinerary
+    @State private var isPulsing = false
+
+    var body: some View {
+        ItineraSurface {
+            HStack(spacing: 15) {
+                ZStack {
+                    Circle()
+                        .fill(theme.accent.opacity(0.28))
+                        .frame(width: 64, height: 64)
+                        .scaleEffect(isPulsing ? 1.22 : 1.0)
+                        .opacity(isPulsing ? 0 : 0.5)
+                        .animation(
+                            reduceMotion
+                                ? nil
+                                : .easeOut(duration: 1.6).repeatForever(autoreverses: false),
+                            value: isPulsing
+                        )
+
+                    Image(systemName: "location.fill.viewfinder")
+                        .font(.system(size: 25, weight: .semibold))
+                        .foregroundStyle(theme.accentContrast)
+                        .frame(width: 52, height: 52)
+                        .background(theme.accent, in: Circle())
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("TODAY")
+                        .font(.caption.weight(.bold))
+                        .tracking(1.5)
+                        .foregroundStyle(theme.highlightStrong)
+                    Text("Continue \(trip.displayTitle)")
+                        .font(.system(.title3, design: .serif, weight: .bold))
+                        .foregroundStyle(theme.primaryText)
+                    Text("Next stop, directions, and day progress")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(theme.secondaryText)
+            }
+        }
+        .onAppear { isPulsing = true }
+    }
+}
+
 struct LocalPendingTripRow: View {
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let job: PendingJobRecord
+    @State private var rotationAngle: Double = 0
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                .font(.title2)
-                .foregroundStyle(theme.route)
-                .frame(width: 40, height: 40)
-                .background(theme.route.opacity(0.1), in: Circle())
+            ZStack {
+                Circle()
+                    .fill(theme.warning.opacity(0.12))
+                    .frame(width: 42, height: 42)
+                Image(systemName: "hourglass")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.warning)
+                    .rotationEffect(.degrees(rotationAngle))
+                    .animation(
+                        reduceMotion
+                            ? nil
+                            : .linear(duration: 2.4).repeatForever(autoreverses: false),
+                        value: rotationAngle
+                    )
+            }
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(job.title ?? "Pending trip")
                     .font(.system(.headline, design: .serif, weight: .bold))
                     .foregroundStyle(theme.primaryText)
-                Label("Generating the route", systemImage: "hourglass")
+                Text("Building your route…")
                     .font(.caption)
                     .foregroundStyle(theme.warning)
             }
 
             Spacer()
             Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
                 .foregroundStyle(theme.secondaryText)
         }
         .frame(minHeight: 58)
+        .onAppear { rotationAngle = 360 }
     }
 }
 
@@ -524,20 +581,23 @@ struct TripRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 4) {
-                Image(systemName: statusIcon)
-                    .font(.title3)
-                    .foregroundStyle(statusColor)
-                Rectangle()
-                    .fill(statusColor.opacity(0.35))
-                    .frame(width: 2, height: 35)
-            }
-            .frame(width: 28)
+            Image(systemName: statusIcon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 42, height: 42)
+                .background(statusColor.opacity(0.10), in: Circle())
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(trip.displayTitle.isEmpty ? "Untitled trip" : trip.displayTitle)
-                    .font(.system(.title3, design: .serif, weight: .bold))
-                    .foregroundStyle(theme.primaryText)
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(trip.displayTitle.isEmpty ? "Untitled trip" : trip.displayTitle)
+                        .font(.system(.headline, design: .serif, weight: .bold))
+                        .foregroundStyle(theme.primaryText)
+                    if let city = trip.city, let country = trip.country, !city.isEmpty {
+                        Label("\(city), \(country)", systemImage: "mappin.and.ellipse")
+                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                }
 
                 if let arrival = trip.arrivalDate, let departure = trip.departureDate {
                     Label("\(arrival)  →  \(departure)", systemImage: "calendar")
@@ -571,10 +631,10 @@ struct TripRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(theme.secondaryText)
-                    .padding(.top, 5)
+                    .padding(.top, 12)
             }
         }
-        .frame(minHeight: 82)
+        .frame(minHeight: 72)
         .accessibilityElement(children: .combine)
     }
 

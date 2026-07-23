@@ -55,13 +55,23 @@ struct PopularItinerariesView: View {
                             emptyState
                         } else if !isLoading && groups.isEmpty {
                             noSearchResults
+                        } else if isLoading && itineraries.isEmpty {
+                            ItineraSectionHeading(
+                                number: "LOADING",
+                                title: "Popular routes",
+                                message: nil
+                            )
+                            ForEach(0..<3, id: \.self) { i in
+                                ItineraSkeletonRow()
+                                    .opacity(1 - Double(i) * 0.18)
+                            }
                         } else {
                             ForEach(groups) { group in
                                 VStack(alignment: .leading, spacing: 12) {
                                     ItineraSectionHeading(
-                                        number: "POPULAR",
+                                        number: group.itineraries.count == 1 ? "1 ROUTE" : "\(group.itineraries.count) ROUTES",
                                         title: group.location,
-                                        message: "Ranked by saves from Itinera travelers."
+                                        message: nil
                                     )
 
                                     ForEach(group.itineraries) { itinerary in
@@ -76,6 +86,7 @@ struct PopularItinerariesView: View {
                                             }
                                         }
                                         .buttonStyle(.plain)
+                                        .revealOnAppear()
                                     }
                                 }
                             }
@@ -86,13 +97,6 @@ struct PopularItinerariesView: View {
                     .padding(.bottom, 36)
                 }
                 .refreshable { await load() }
-
-                if isLoading && itineraries.isEmpty {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(theme.route)
-                        .accessibilityLabel("Loading popular itineraries")
-                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -109,8 +113,10 @@ struct PopularItinerariesView: View {
         ItineraSurface {
             VStack(spacing: 16) {
                 Image(systemName: errorMessage == nil ? "globe.americas.fill" : "wifi.exclamationmark")
-                    .font(.system(size: 38))
+                    .font(.system(size: 34))
                     .foregroundStyle(theme.route)
+                    .frame(width: 72, height: 72)
+                    .background(theme.route.opacity(0.10), in: Circle())
 
                 Text(errorMessage == nil ? "Popular routes are on their way" : "Popular routes couldn't be loaded")
                     .font(.system(.title3, design: .serif, weight: .bold))
@@ -196,9 +202,9 @@ private struct PopularItineraryCard: View {
                 }
 
                 Spacer(minLength: 0)
-                Image(systemName: itinerary.isSaved ? "bookmark.fill" : "chevron.right")
+                Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(itinerary.isSaved ? theme.highlightStrong : theme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .accessibilityHidden(true)
             }
 
@@ -258,6 +264,7 @@ private struct PopularItineraryDetailView: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         saveBar
                     }
+                    .transition(.opacity)
             } else if isLoading {
                 ProgressView()
                     .controlSize(.large)
@@ -267,6 +274,7 @@ private struct PopularItineraryDetailView: View {
                 loadFailure
             }
         }
+        .animation(.easeInOut(duration: 0.35), value: detail != nil)
         .navigationTitle(summary.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -290,13 +298,17 @@ private struct PopularItineraryDetailView: View {
                             .tint(theme.accentContrast)
                     } else {
                         Image(systemName: isSaved ? "checkmark.circle.fill" : "bookmark.fill")
+                            .scaleEffect(isSaved ? 1.1 : 1)
+                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSaved)
                     }
                     Text(isSaved ? "Saved to Trips" : "Add to Trips")
+                        .animation(.easeInOut(duration: 0.2), value: isSaved)
                 }
             }
             .buttonStyle(ItineraPrimaryButtonStyle())
             .disabled(isSaved || isSaving)
             .opacity(isSaved ? 0.72 : 1)
+            .animation(.easeInOut(duration: 0.2), value: isSaved)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)

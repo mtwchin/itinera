@@ -143,8 +143,7 @@ struct TodayRootView: View {
             }
         }
         if activeTrip == nil {
-            TripWidgetSnapshotStore.clear()
-            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            await appState.clearWidgetSnapshot()
         }
     }
 }
@@ -666,6 +665,7 @@ final class TodayTripViewModel: ObservableObject {
 }
 
 struct TodayTripView: View {
+    @EnvironmentObject private var appState: AppState
     @Environment(\.itineraTheme) private var theme
     @StateObject private var model: TodayTripViewModel
     @State private var liveActivityID: String?
@@ -742,6 +742,7 @@ struct TodayTripView: View {
                                 message: "Directions and progress stay one tap away."
                             )
                             currentStopCard(current)
+                                .revealOnAppear()
 
                             if let timingActivity = model.timingActivity {
                                 ItineraSectionHeading(
@@ -781,6 +782,7 @@ struct TodayTripView: View {
                                 message: nil
                             )
                             compactStopCard(next)
+                                .revealOnAppear()
                         }
 
                         progressCard(day: day)
@@ -798,6 +800,7 @@ struct TodayTripView: View {
                                     Task { await model.set(status, for: activity) }
                                 }
                             )
+                            .revealOnAppear()
                         }
                     }
                 }
@@ -824,15 +827,17 @@ struct TodayTripView: View {
         }
         .task {
             await model.load()
-            updateWidgetSnapshot()
+            await updateWidgetSnapshot()
         }
         .task(id: timingTaskID) {
             guard progressReady else { return }
             await model.loadTimingIfProgressReady()
         }
         .onChange(of: model.statuses) { _, _ in
-            updateWidgetSnapshot()
-            Task { await updateLiveActivity() }
+            Task {
+                await updateWidgetSnapshot()
+                await updateLiveActivity()
+            }
         }
         .sheet(isPresented: $isShowingAdjustment) {
             if let day = model.day {
@@ -875,6 +880,7 @@ struct TodayTripView: View {
                 }
             }
         }
+        .revealOnAppear()
     }
 
     private func currentStopCard(_ activity: Activity) -> some View {
@@ -958,6 +964,7 @@ struct TodayTripView: View {
         }
         .buttonStyle(.bordered)
         .tint(theme.success)
+        .sensoryFeedback(.success, trigger: model.completedCount)
     }
 
     private func skipButton(for activity: Activity) -> some View {
@@ -969,6 +976,7 @@ struct TodayTripView: View {
         }
         .buttonStyle(.bordered)
         .tint(theme.secondaryText)
+        .sensoryFeedback(.selection, trigger: model.skippedCount)
     }
 
     private func compactStopCard(_ activity: Activity) -> some View {
@@ -998,19 +1006,24 @@ struct TodayTripView: View {
 
     private var completedDayCard: some View {
         ItineraSurface {
-            VStack(spacing: 10) {
+            VStack(spacing: 14) {
                 Image(systemName: "checkmark.seal.fill")
-                    .font(.largeTitle)
+                    .font(.system(size: 38))
                     .foregroundStyle(theme.success)
-                Text("Today's route is wrapped up")
-                    .font(.system(.title3, design: .serif, weight: .bold))
-                    .foregroundStyle(theme.primaryText)
-                Text("Every stop is complete or intentionally skipped.")
-                    .font(.subheadline)
-                    .foregroundStyle(theme.secondaryText)
-                    .multilineTextAlignment(.center)
+                    .frame(width: 78, height: 78)
+                    .background(theme.success.opacity(0.10), in: Circle())
+                VStack(spacing: 6) {
+                    Text("Today's route is wrapped up")
+                        .font(.system(.title3, design: .serif, weight: .bold))
+                        .foregroundStyle(theme.primaryText)
+                    Text("Every stop is complete or intentionally skipped.")
+                        .font(.subheadline)
+                        .foregroundStyle(theme.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
     }
 
@@ -1068,10 +1081,9 @@ struct TodayTripView: View {
         )
     }
 
-    private func updateWidgetSnapshot() {
+    private func updateWidgetSnapshot() async {
         guard let state = model.liveActivityState else {
-            TripWidgetSnapshotStore.clear()
-            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            await appState.clearWidgetSnapshot()
             return
         }
         let snapshot = TripWidgetSnapshot(
@@ -1085,9 +1097,7 @@ struct TodayTripView: View {
             leaveBy: state.leaveBy,
             progress: state.progress
         )
-        if TripWidgetSnapshotStore.save(snapshot) {
-            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
-        }
+        _ = await appState.saveWidgetSnapshot(snapshot)
     }
 }
 
@@ -1112,9 +1122,14 @@ struct TodayStopProgressRow: View {
                         .font(.headline)
                         .foregroundStyle(theme.primaryText)
                         .strikethrough(status == .skipped)
-                    Text("\(activity.time) · \(activity.duration)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(theme.secondaryText)
+                    Label {
+                        Text("\(activity.time) · \(activity.duration)")
+                            .monospacedDigit()
+                    } icon: {
+                        Image(systemName: "clock")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText)
                 }
 
                 Spacer(minLength: 0)
@@ -1197,6 +1212,7 @@ private extension TripStopStatus {
             }
         )
     }
+    .environmentObject(AppState.preview())
     .environment(\.itineraTheme, .atlas)
     .preferredColorScheme(.light)
 }
@@ -1218,6 +1234,7 @@ private extension TripStopStatus {
             }
         )
     }
+    .environmentObject(AppState.preview())
     .environment(\.itineraTheme, .atlas)
     .preferredColorScheme(.light)
     .dynamicTypeSize(.accessibility2)

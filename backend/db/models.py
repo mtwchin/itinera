@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.base import Base
+from backend.generation_policy import CURRENT_GENERATION_POLICY_VERSION
 
 
 def _utcnow() -> datetime:
@@ -58,6 +59,38 @@ class User(Base):
     )
     refresh_tokens: Mapped[list[GuestRefreshToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
+    )
+    ai_consent_events: Mapped[list[AIConsentEvent]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class AIConsentEvent(Base):
+    """Append-only, data-minimized record of a principal's AI-consent choice."""
+
+    __tablename__ = "ai_consent_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False, index=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="ai_consent_events")
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_ai_consent_events_version"),
+        CheckConstraint(
+            "action IN ('granted', 'withdrawn')",
+            name="ck_ai_consent_events_action",
+        ),
+        Index("ix_ai_consent_events_user_version_recorded", "user_id", "version", "recorded_at"),
     )
 
 
@@ -152,8 +185,12 @@ class Itinerary(Base):
     )
     request: Mapped[dict] = mapped_column(JSONB, nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation_policy_version: Mapped[int] = mapped_column(
+        Integer, default=CURRENT_GENERATION_POLICY_VERSION
+    )
     result: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(Text)
+    failure_code: Mapped[str | None] = mapped_column(String(64))
     idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
     run_token: Mapped[str | None] = mapped_column(String(64), index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(

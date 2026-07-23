@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import asyncpg
@@ -15,6 +16,7 @@ import redis.asyncio as redis_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ResponseError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -33,16 +35,26 @@ from backend.admission import (
     renew_stream_lease,
     stream_lease_key,
 )
-from backend.auth import create_access_token
+from backend.ai_consent import (
+    CURRENT_AI_CONSENT_VERSION,
+    GRANTED,
+    WITHDRAWN,
+    has_current_ai_consent,
+)
+from backend.auth import create_access_token, current_user
 from backend.config import Settings, get_settings
+from backend.db.models import AIConsentEvent, AgentRun, Itinerary, JobStatus, OutboxEvent, User
+from backend.db.repo import finish_job_sync
 from backend.db.session import get_session
 from backend.readiness import check_postgres_readiness, resolve_required_revision
 from backend.routers import auth as auth_router
+from backend.routers import trips as trips_router
 from backend.routers.health import _evaluate_readiness
 from backend.stream_status import (
     authoritative_stream_status,
     terminate_stream_status_pool,
 )
+from backend.workers.outbox_dispatcher import dispatch_outbox_batch
 
 pytestmark = [
     pytest.mark.integration,
@@ -161,6 +173,31 @@ async def _account_deletion_client(*, application_name: str | None = None):
         await engine.dispose()
 
 
+@asynccontextmanager
+async def _trip_edit_client(user_id):
+    engine = create_async_engine(_DATABASE_URL, poolclass=NullPool)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def real_session():
+        async with session_factory() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(trips_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = real_session
+    app.dependency_overrides[current_user] = lambda: User(id=user_id)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    try:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://integration.test",
+        ) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+
 async def _insert_users(user_ids: Sequence) -> None:
     connection = await asyncpg.connect(dsn=_asyncpg_dsn(_DATABASE_URL), timeout=2)
     try:
@@ -194,6 +231,281 @@ async def _user_exists(user_id) -> bool:
             )
         )
     finally:
+        connection.terminate()
+
+
+async def _ai_consent_event_count(user_id) -> int:
+    connection = await asyncpg.connect(dsn=_asyncpg_dsn(_DATABASE_URL), timeout=2)
+    try:
+        return await connection.fetchval(
+            "SELECT COUNT(*) FROM ai_consent_events WHERE user_id = $1", user_id
+        )
+    finally:
+        connection.terminate()
+
+
+async def test_ai_consent_audit_records_grant_and_withdrawal() -> None:
+    user_id = uuid4()
+    engine = create_async_engine(_DATABASE_URL, poolclass=NullPool)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await _insert_users((user_id,))
+        async with session_factory() as session, session.begin():
+            session.add(
+                AIConsentEvent(
+                    user_id=user_id,
+                    version=CURRENT_AI_CONSENT_VERSION,
+                    action=GRANTED,
+                    recorded_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+                )
+            )
+        async with session_factory() as session:
+            assert await has_current_ai_consent(session, user_id) is True
+        async with session_factory() as session, session.begin():
+            session.add(
+                AIConsentEvent(
+                    user_id=user_id,
+                    version=CURRENT_AI_CONSENT_VERSION,
+                    action=WITHDRAWN,
+                    recorded_at=datetime(2026, 7, 16, 0, 0, 1, tzinfo=timezone.utc),
+                )
+            )
+        async with session_factory() as session:
+            assert await has_current_ai_consent(session, user_id) is False
+    finally:
+        await _delete_users((user_id,))
+        await engine.dispose()
+
+
+async def test_failed_ai_edit_persists_a_privacy_safe_attempt_record() -> None:
+    user_id = uuid4()
+    job_id = f"edit-ledger-{uuid4().hex}"
+    itinerary_id = uuid4()
+    engine = create_async_engine(_DATABASE_URL, poolclass=NullPool)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    def failing_generate(_system: str, _user: str) -> str:
+        raise OSError("provider detail must never persist")
+
+    failing_generate.provider = "openai"
+    failing_generate.model = "test-model"
+    failing_generate.reported_usage = None
+    result = {
+        "itinerary": [{
+            "day": 1,
+            "theme": "Center",
+            "activities": [{
+                "time": "09:00",
+                "name": "Museum",
+                "type": "culture",
+                "duration": "1 hour",
+                "description": "Explore the collection.",
+                "address": "Museum Street",
+                "coordinates": {"lat": 38.71, "lng": -9.14},
+            }],
+        }],
+        "tips": [],
+        "accommodation_info": {
+            "morning_start": "09:00",
+            "evening_return": "20:00",
+            "transportation_tips": "Walk.",
+        },
+        "estimated_budget": "€20",
+    }
+    try:
+        await _insert_users((user_id,))
+        async with session_factory() as session, session.begin():
+            session.add(
+                Itinerary(
+                    id=itinerary_id,
+                    user_id=user_id,
+                    job_id=job_id,
+                    status=JobStatus.succeeded,
+                    request={},
+                    request_hash=f"hash-{uuid4().hex}",
+                    result=result,
+                    version=1,
+                )
+            )
+
+        with patch(
+            "backend.ai_consent.require_current_ai_consent", new=AsyncMock()
+        ), patch(
+            "backend.agents.editor.generate_fn_for_settings",
+            return_value=failing_generate,
+        ):
+            async with _trip_edit_client(user_id) as client:
+                response = await client.post(
+                    f"/api/v1/itineraries/{job_id}/ai-edit",
+                    json={"message": "Move lunch later", "expected_version": 1},
+                )
+
+        async with session_factory() as session:
+            run = (
+                await session.execute(
+                    select(AgentRun).where(AgentRun.itinerary_id == itinerary_id)
+                )
+            ).scalar_one()
+        assert response.status_code == 503
+        assert response.json()["detail"] == (
+            "AI editing is temporarily unavailable. Please try again later."
+        )
+        assert run.agent == "itinerary_editor"
+        assert run.tool_calls == [{
+            "kind": "provider_call",
+            "provider": "openai",
+            "model": "test-model",
+            "prompt_version": "2026-07-16-v1",
+            "usage": {"source": "unavailable"},
+        }]
+        assert "provider detail" not in json.dumps(run.tool_calls)
+    finally:
+        await _delete_users((user_id,))
+        await engine.dispose()
+
+
+async def test_dispatched_pending_outbox_work_waits_for_a_lease_expiry() -> None:
+    user_id = uuid4()
+    job_id = f"outbox-recovery-{uuid4().hex}"
+    now = datetime.now(timezone.utc)
+    engine = create_async_engine(_DATABASE_URL, poolclass=NullPool)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    sent: list[dict] = []
+
+    def sender(**kwargs) -> None:
+        sent.append(kwargs)
+
+    try:
+        await _insert_users((user_id,))
+        async with session_factory() as session, session.begin():
+            session.add_all(
+                [
+                    Itinerary(
+                        user_id=user_id,
+                        job_id=job_id,
+                        status=JobStatus.pending,
+                        request={},
+                        request_hash=f"hash-{uuid4().hex}",
+                    ),
+                    OutboxEvent(
+                        event_type="itinerary.generate",
+                        aggregate_id=job_id,
+                        payload={"job_id": job_id},
+                        attempts=1,
+                        dispatched_at=now - timedelta(seconds=30),
+                        available_at=now - timedelta(seconds=1),
+                    ),
+                ]
+            )
+
+        async with session_factory() as session, session.begin():
+            assert await dispatch_outbox_batch(session, sender=sender) == 0
+        assert sent == []
+
+        async with session_factory() as session, session.begin():
+            itinerary = (
+                await session.execute(
+                    select(Itinerary).where(Itinerary.job_id == job_id)
+                )
+            ).scalar_one()
+            itinerary.status = JobStatus.running
+            itinerary.lease_expires_at = now - timedelta(seconds=1)
+            await session.flush()
+            assert await dispatch_outbox_batch(session, sender=sender) == 1
+
+        assert len(sent) == 1
+        assert sent[0]["kwargs"] == {"job_id": job_id}
+        assert sent[0]["task_id"].startswith("outbox-")
+    finally:
+        await _delete_users((user_id,))
+        await engine.dispose()
+
+
+async def test_worker_completion_persists_agent_runs_atomically_with_terminal_state() -> None:
+    user_id = uuid4()
+    itinerary_id = uuid4()
+    job_id = f"agent-run-{uuid4().hex}"
+    run_token = f"lease-{uuid4().hex}"
+    agent_runs = [
+        {
+            "agent": "itinerary_composer",
+            "step_index": 1,
+            "tool_calls": [
+                {
+                    "kind": "provider_call",
+                    "provider": "ollama",
+                    "model": "test-model",
+                    "prompt_version": "test-v1",
+                    "usage": {
+                        "source": "provider",
+                        "input_tokens": 123,
+                        "output_tokens": 456,
+                    },
+                }
+            ],
+            "latency_ms": 42,
+        }
+    ]
+    connection = await asyncpg.connect(dsn=_asyncpg_dsn(_DATABASE_URL), timeout=2)
+    try:
+        async with connection.transaction():
+            await connection.execute(
+                "INSERT INTO users (id, created_at) VALUES ($1, CURRENT_TIMESTAMP)",
+                user_id,
+            )
+            await connection.execute(
+                "INSERT INTO itineraries "
+                "(id, user_id, job_id, status, request, request_hash, version, run_token, "
+                "created_at, updated_at) "
+                "VALUES ($1, $2, $3, 'running'::jobstatus, '{}'::jsonb, $4, 1, $5, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                itinerary_id,
+                user_id,
+                job_id,
+                f"hash-{uuid4().hex}",
+                run_token,
+            )
+
+        worker_settings = Settings(
+            _env_file=None, env=_ENVIRONMENT, database_url=_DATABASE_URL
+        )
+        with patch("backend.db.repo.get_settings", return_value=worker_settings):
+            finished = await asyncio.to_thread(
+                finish_job_sync,
+                job_id=job_id,
+                run_token=run_token,
+                status=JobStatus.succeeded,
+                result={"itinerary": []},
+                agent_runs=agent_runs,
+            )
+            stale_finish = await asyncio.to_thread(
+                finish_job_sync,
+                job_id=job_id,
+                run_token="stale-lease",
+                status=JobStatus.succeeded,
+                result={"itinerary": []},
+                agent_runs=agent_runs,
+            )
+
+        itinerary = await connection.fetchrow(
+            "SELECT status, run_token FROM itineraries WHERE id = $1", itinerary_id
+        )
+        persisted_runs = await connection.fetch(
+            "SELECT agent, step_index, tool_calls, latency_ms FROM agent_runs "
+            "WHERE itinerary_id = $1 ORDER BY step_index",
+            itinerary_id,
+        )
+        assert finished is True
+        assert stale_finish is False
+        assert itinerary["status"] == "succeeded"
+        assert itinerary["run_token"] is None
+        assert len(persisted_runs) == 1
+        assert persisted_runs[0]["agent"] == "itinerary_composer"
+        assert persisted_runs[0]["step_index"] == 1
+        assert persisted_runs[0]["latency_ms"] == 42
+        assert json.loads(persisted_runs[0]["tool_calls"]) == agent_runs[0]["tool_calls"]
+    finally:
+        await connection.execute("DELETE FROM users WHERE id = $1", user_id)
         connection.terminate()
 
 
@@ -843,6 +1155,18 @@ async def test_real_account_deletion_is_retry_safe_without_weakening_tokens() ->
 
     await _insert_users(user_ids)
     try:
+        connection = await asyncpg.connect(dsn=_asyncpg_dsn(_DATABASE_URL), timeout=2)
+        try:
+            await connection.execute(
+                "INSERT INTO ai_consent_events (id, user_id, version, action, recorded_at) "
+                "VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)",
+                uuid4(),
+                deleted_user_id,
+                CURRENT_AI_CONSENT_VERSION,
+                GRANTED,
+            )
+        finally:
+            connection.terminate()
         async with _account_deletion_client() as client:
             first = await client.request(
                 "DELETE",
@@ -852,6 +1176,7 @@ async def test_real_account_deletion_is_retry_safe_without_weakening_tokens() ->
             )
             assert first.status_code == 204
             assert not await _user_exists(deleted_user_id)
+            assert await _ai_consent_event_count(deleted_user_id) == 0
 
             # A successful response can be lost. Replaying the original
             # authenticated request must converge to the same result.

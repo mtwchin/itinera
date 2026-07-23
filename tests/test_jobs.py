@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
+from backend.config import Settings
 from backend.db.models import Itinerary, JobStatus, OutboxEvent
 from backend.db.repo import (
     IdempotencyConflictError,
@@ -16,7 +18,10 @@ from backend.db.repo import (
     finish_job_sync,
     materialize_activity_ids,
 )
-from backend.workers.outbox_dispatcher import dispatch_outbox_batch
+from backend.workers.outbox_dispatcher import (
+    _eligible_outbox_events_statement,
+    dispatch_outbox_batch,
+)
 
 
 def job_row(*, request: dict, request_hash: str, user_id: uuid.UUID) -> Itinerary:
@@ -200,6 +205,17 @@ async def test_outbox_failure_is_retried_with_backoff():
     assert "broker unavailable" in event.last_error
 
 
+def test_outbox_does_not_redispatch_a_queued_published_job():
+    statement = _eligible_outbox_events_statement(
+        now=datetime.now(timezone.utc), batch_size=50
+    )
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "outbox_events.dispatched_at IS NULL AND itineraries.status =" in sql
+    assert "itineraries.status = %(status_2)s AND (itineraries.lease_expires_at IS NULL" in sql
+    assert "outbox_events.dispatched_at IS NULL OR" not in sql
+
+
 def test_duplicate_terminal_delivery_does_not_run_pipeline():
     from backend.workers import tasks
 
@@ -248,6 +264,7 @@ def test_worker_persists_success_without_storing_a_redis_result():
     from backend.workers import tasks
 
     order: list[str] = []
+    persisted_agent_runs: list[dict] = []
     redis_client = MagicMock()
     claim = JobClaim(
         claimed=True,
@@ -260,6 +277,7 @@ def test_worker_persists_success_without_storing_a_redis_result():
     def finish(**kwargs):
         order.append("database")
         assert kwargs["status"] == JobStatus.succeeded
+        persisted_agent_runs.extend(kwargs["agent_runs"])
         return True
 
     def publish(_client, _job_id, event):
@@ -267,7 +285,9 @@ def test_worker_persists_success_without_storing_a_redis_result():
 
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", return_value={"itinerary": {"itinerary": []}}
-    ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
+    ) as pipeline, patch.object(
+        tasks, "finish_job_sync", side_effect=finish
+    ), patch.object(
         tasks, "_publish", side_effect=publish
     ), patch.object(
         tasks.redis_sync, "from_url", return_value=redis_client
@@ -280,6 +300,11 @@ def test_worker_persists_success_without_storing_a_redis_result():
         "version": 1,
     }
     assert order.index("database") < order.index("publish:succeeded")
+    pipeline.assert_called_once()
+    assert pipeline.call_args.args[0] == claim.request
+    assert pipeline.call_args.kwargs["generation_policy_version"] == 2
+    assert pipeline.call_args.kwargs["record_agent_run"] is not None
+    assert persisted_agent_runs == []
     redis_client.set.assert_not_called()
     redis_client.eval.assert_not_called()
     redis_factory.assert_called_once_with(
@@ -294,6 +319,8 @@ def test_worker_persists_failure_without_storing_a_redis_result():
     from backend.workers import tasks
 
     order: list[str] = []
+    persisted_failure: dict = {}
+    published_events: list[dict] = []
     redis_client = MagicMock()
     claim = JobClaim(
         claimed=True,
@@ -306,10 +333,12 @@ def test_worker_persists_failure_without_storing_a_redis_result():
     def finish(**kwargs):
         order.append("database")
         assert kwargs["status"] == JobStatus.failed
+        persisted_failure.update(kwargs)
         return True
 
     def publish(_client, _job_id, event):
         order.append(f"publish:{event['type']}")
+        published_events.append(event)
 
     with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
         tasks, "run_pipeline", side_effect=RuntimeError("provider failed")
@@ -322,14 +351,82 @@ def test_worker_persists_failure_without_storing_a_redis_result():
             tasks.run_itinerary_pipeline.run(job_id="job-1")
 
     assert order.index("database") < order.index("publish:failed")
+    assert "error" not in persisted_failure
+    assert persisted_failure["failure_code"] == "generation_failed"
+    assert published_events[-1] == {
+        "type": "failed",
+        "job_id": "job-1",
+        "error": "We couldn't create this itinerary. Please try again.",
+        "error_code": "generation_failed",
+    }
     redis_client.set.assert_not_called()
     redis_client.eval.assert_not_called()
 
 
-def test_worker_discards_celery_results_without_a_new_hard_time_limit():
+def test_soft_worker_deadline_persists_a_retryable_public_failure():
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from backend.workers import tasks
+
+    persisted_failure: dict = {}
+    claim = JobClaim(
+        claimed=True,
+        job_id="job-1",
+        status=JobStatus.running,
+        request={"city": "Lisbon"},
+        run_token="lease-token",
+    )
+
+    def finish(**kwargs):
+        persisted_failure.update(kwargs)
+        return True
+
+    with patch.object(tasks, "claim_job_sync", return_value=claim), patch.object(
+        tasks, "run_pipeline", side_effect=SoftTimeLimitExceeded()
+    ), patch.object(tasks, "finish_job_sync", side_effect=finish), patch.object(
+        tasks, "_publish"
+    ), patch.object(tasks.redis_sync, "from_url", return_value=MagicMock()):
+        with pytest.raises(SoftTimeLimitExceeded):
+            tasks.run_itinerary_pipeline.run(job_id="job-1")
+
+    assert persisted_failure["failure_code"] == "generation_unavailable"
+
+
+def test_worker_discards_celery_results_with_a_bounded_execution_window():
     from backend.workers import tasks
 
     assert tasks.run_itinerary_pipeline.ignore_result is True
-    assert tasks.run_itinerary_pipeline.time_limit is None
+    assert tasks.run_itinerary_pipeline.soft_time_limit == 105
+    assert tasks.run_itinerary_pipeline.time_limit == 120
+    assert tasks.celery_app.conf.broker_transport_options == {"visibility_timeout": 180}
+    assert tasks.celery_app.conf.result_backend_transport_options == {
+        "visibility_timeout": 180
+    }
     assert tasks.celery_app.conf.task_store_errors_even_if_ignored is False
     assert tasks.celery_app.conf.result_expires == 24 * 60 * 60
+
+
+def test_job_timing_configuration_requires_a_terminal_persistence_margin():
+    settings = Settings(_env_file=None)
+    assert (
+        settings.itinerary_job_soft_time_limit_seconds,
+        settings.itinerary_job_time_limit_seconds,
+        settings.itinerary_job_lease_seconds,
+        settings.celery_broker_visibility_timeout_seconds,
+    ) == (105, 120, 150, 180)
+
+    with pytest.raises(ValueError, match="hard task limit"):
+        Settings(
+            _env_file=None,
+            itinerary_job_time_limit_seconds=120,
+            itinerary_job_lease_completion_margin_seconds=30,
+            itinerary_job_lease_seconds=149,
+        )
+
+    with pytest.raises(ValueError, match="VISIBILITY_TIMEOUT"):
+        Settings(
+            _env_file=None,
+            env="prod",
+            itinerary_job_lease_seconds=150,
+            celery_broker_visibility_timeout_seconds=149,
+        )

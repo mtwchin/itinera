@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    api_request_max_body_bytes: int = Field(default=262_144, ge=1_024, le=10_485_760)
+    metrics_enabled: bool = False
 
     database_url: str = Field(
         default="postgresql+asyncpg://itinera:itinera@localhost:5432/itinera"
@@ -50,17 +52,26 @@ class Settings(BaseSettings):
     itinerary_stream_lease_renew_seconds: int = Field(default=10, ge=1, le=2 * 60)
     celery_broker_url: str = Field(default="redis://localhost:6379/1")
     celery_result_backend: str = Field(default="redis://localhost:6379/2")
+    # Redis redelivery must not occur while a worker can still own its
+    # database lease. This applies to both broker and Redis result transport.
+    celery_broker_visibility_timeout_seconds: int = Field(
+        default=180, ge=30, le=7_200
+    )
 
-    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq"] = "ollama"
+    # OpenAI is the production default. Ollama remains an explicit keyless
+    # local-development option via ITINERARY_COMPOSER_PROVIDER=ollama.
+    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq"] = "openai"
     ollama_base_url: str = "http://localhost:11434/api"
     ollama_model: str = "qwen2.5:7b-instruct"
     ollama_api_key: str | None = None
-    ollama_request_timeout_seconds: int = Field(default=180, ge=1, le=600)
+    ollama_request_timeout_seconds: int = Field(default=90, ge=1, le=600)
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-4-8"
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
-    openai_request_timeout_seconds: int = Field(default=180, ge=1, le=600)
+    openai_request_timeout_seconds: int = Field(default=90, ge=1, le=600)
+    itinerary_composer_max_attempts: int = Field(default=2, ge=1, le=3)
+    itinerary_editor_max_output_tokens: int = Field(default=8_000, ge=256, le=16_000)
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
     groq_api_key: str | None = None
@@ -93,11 +104,23 @@ class Settings(BaseSettings):
     auth_refresh_retry_grace_seconds: int = 30
     apple_sign_in_client_id: str | None = None
 
-    # A worker owns a running job until this lease expires. Progress callbacks
-    # renew the lease so a broker redelivery cannot execute the same job twice.
-    itinerary_job_lease_seconds: int = 60 * 60
-    outbox_redispatch_initial_seconds: int = 5 * 60
-    outbox_redispatch_max_seconds: int = 60 * 60
+    # A worker has a bounded window to persist a terminal state after a soft
+    # timeout. The lease must outlive the hard limit plus that completion
+    # margin, otherwise a second worker could start a paid generation while
+    # the first worker is still recording its outcome.
+    itinerary_job_soft_time_limit_seconds: int = Field(default=105, ge=15, le=600)
+    itinerary_job_time_limit_seconds: int = Field(default=120, ge=20, le=660)
+    itinerary_job_lease_completion_margin_seconds: int = Field(
+        default=30, ge=5, le=120
+    )
+    # Keep the historical one-hour setting valid during a rolling deployment;
+    # checked-in production defaults use the bounded 150-second schedule.
+    itinerary_job_lease_seconds: int = Field(default=150, ge=30, le=7_200)
+    # These schedule recovery checks after publication. A dispatched pending
+    # job is deliberately not republished merely because it is waiting in the
+    # broker queue; only an expired running lease is recovered.
+    outbox_redispatch_initial_seconds: int = Field(default=15, ge=1, le=3600)
+    outbox_redispatch_max_seconds: int = Field(default=120, ge=1, le=3600)
 
     google_maps_api_key: str | None = None
     tiktok_api_key: str | None = None
@@ -107,10 +130,16 @@ class Settings(BaseSettings):
     # Provider selection is explicit so a production deployment cannot
     # silently present development fixtures as live trend data or mix Google
     # geocoding content with an Apple map. The HTTP trends feed is an internal,
-    # normalized contract backed by a commercially licensed source.
+    # normalized contract backed by a commercially licensed social-discovery
+    # provider. It must return venue candidates from the requested platforms,
+    # rather than raw social posts alone.
     trends_provider: Literal["synthetic", "tiktok_research", "http"] = "synthetic"
     trends_feed_url: str | None = None
     trends_feed_api_key: str | None = None
+    trends_social_platforms: tuple[Literal["tiktok", "instagram_reels"], ...] = (
+        "tiktok",
+        "instagram_reels",
+    )
     maps_provider: Literal["synthetic", "google", "apple"] = "synthetic"
     apple_maps_team_id: str | None = None
     apple_maps_key_id: str | None = None
@@ -138,6 +167,34 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ITINERARY_STREAM_LEASE_TTL_SECONDS must exceed the renewal "
                 "interval plus the longest bounded stream operation"
+            )
+        if self.itinerary_job_soft_time_limit_seconds >= self.itinerary_job_time_limit_seconds:
+            raise ValueError(
+                "ITINERARY_JOB_SOFT_TIME_LIMIT_SECONDS must be less than "
+                "ITINERARY_JOB_TIME_LIMIT_SECONDS"
+            )
+        if (
+            self.itinerary_job_time_limit_seconds
+            + self.itinerary_job_lease_completion_margin_seconds
+            > self.itinerary_job_lease_seconds
+        ):
+            raise ValueError(
+                "ITINERARY_JOB_LEASE_SECONDS must cover the hard task limit "
+                "plus its terminal-persistence margin"
+            )
+        if self.outbox_redispatch_initial_seconds > self.outbox_redispatch_max_seconds:
+            raise ValueError(
+                "OUTBOX_REDISPATCH_INITIAL_SECONDS must not exceed "
+                "OUTBOX_REDISPATCH_MAX_SECONDS"
+            )
+        if (
+            self.env == "prod"
+            and self.celery_broker_visibility_timeout_seconds
+            < self.itinerary_job_lease_seconds
+        ):
+            raise ValueError(
+                "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS must not expire "
+                "before ITINERARY_JOB_LEASE_SECONDS"
             )
         return self
 

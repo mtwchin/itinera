@@ -21,27 +21,38 @@ final class TripDateRangeTests: XCTestCase {
         XCTAssertNil(range.end)
     }
 
-    func testRejectsPastDatesAndRangesLongerThanThirtyDays() throws {
+    func testRejectsPastDatesAndRangesLongerThanSevenDays() throws {
         let today = try date(2026, 7, 12)
         var range = TripDateRangeSelection()
 
         XCTAssertEqual(range.select(try date(2026, 7, 11), today: today, calendar: calendar), .rejectedPast)
         XCTAssertEqual(range.phase, .empty)
         XCTAssertEqual(range.select(today, today: today, calendar: calendar), .selectedStart)
-        XCTAssertEqual(range.select(try date(2026, 8, 12), today: today, calendar: calendar), .rejectedTooLong)
+        XCTAssertEqual(range.select(try date(2026, 7, 20), today: today, calendar: calendar), .rejectedTooLong)
         XCTAssertEqual(range.phase, .choosingEnd)
     }
 
-    func testAcceptsExactlyThirtyDays() throws {
+    func testAcceptsExactlySevenDays() throws {
         let today = try date(2026, 7, 12)
         var range = TripDateRangeSelection()
 
         XCTAssertEqual(range.select(today, today: today, calendar: calendar), .selectedStart)
         XCTAssertEqual(
-            range.select(try date(2026, 8, 11), today: today, calendar: calendar),
+            range.select(try date(2026, 7, 19), today: today, calendar: calendar),
             .completed
         )
         XCTAssertEqual(range.phase, .complete)
+    }
+
+    func testLegacyRangeLongerThanTheBetaCapRequiresAReselection() throws {
+        let range = TripDateRangeSelection(
+            start: try date(2026, 7, 12),
+            end: try date(2026, 7, 20),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(range.phase, .choosingEnd)
+        XCTAssertNil(range.end)
     }
 
     func testLocalCalendarIterationStaysOnCalendarDaysAcrossDST() throws {

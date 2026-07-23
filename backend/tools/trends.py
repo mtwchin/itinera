@@ -1,13 +1,16 @@
 """Normalized trending-place provider adapters.
 
 Synthetic and TikTok Research modes exist for local development and tests.
-Production uses the HTTP adapter, which expects normalized data from an
-internal feed backed by a commercially licensed source.
+Production uses the HTTP adapter, a compliant social-discovery feed that
+returns venue candidates discovered from TikTok and Instagram Reels. The feed
+is responsible for its platform permissions; this service never scrapes social
+platforms directly.
 """
 
 from __future__ import annotations
 
 import random
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +19,7 @@ import requests
 TIKTOK_API_URL = "https://open.tiktokapis.com/v2/"
 
 PLACE_TYPES = ("landmark", "food", "culture", "nature", "shopping")
+SOCIAL_PLATFORMS = frozenset(("tiktok", "instagram_reels"))
 
 
 class TrendsProviderUnavailable(RuntimeError):
@@ -31,6 +35,7 @@ def fetch_trending_places(
     provider: str | None = None,
     feed_url: str | None = None,
     feed_api_key: str | None = None,
+    social_platforms: tuple[str, ...] | list[str] | None = None,
     allow_fallback: bool = True,
 ) -> list[dict]:
     """Return normalized places from the explicitly selected provider."""
@@ -39,6 +44,9 @@ def fetch_trending_places(
     if selected == "synthetic":
         return simulate_trending_places(city, country)
     if selected == "http":
+        # Configuration errors must be surfaced to operators, not disguised as
+        # transient upstream outages that can trigger development fixtures.
+        _validate_social_platforms(social_platforms)
         try:
             return _fetch_http_feed(
                 city,
@@ -46,6 +54,7 @@ def fetch_trending_places(
                 num_results=num_results,
                 feed_url=feed_url,
                 api_key=feed_api_key,
+                social_platforms=social_platforms,
             )
         except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
             return _fallback_or_raise(city, country, allow_fallback, exc)
@@ -99,11 +108,17 @@ def _fetch_http_feed(
     num_results: int,
     feed_url: str | None,
     api_key: str | None,
+    social_platforms: tuple[str, ...] | list[str] | None,
 ) -> list[dict]:
     if not feed_url or not api_key:
         raise TrendsProviderUnavailable(
             "TRENDS_FEED_URL and TRENDS_FEED_API_KEY are required"
         )
+    requested_platforms = _validate_social_platforms(social_platforms)
+    payload: dict[str, Any] = {"city": city, "country": country, "limit": num_results}
+    if requested_platforms:
+        payload["platforms"] = list(requested_platforms)
+
     response = requests.post(
         feed_url,
         headers={
@@ -111,7 +126,7 @@ def _fetch_http_feed(
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        json={"city": city, "country": country, "limit": num_results},
+        json=payload,
         timeout=(3.05, 12),
     )
     response.raise_for_status()
@@ -119,7 +134,13 @@ def _fetch_http_feed(
     raw_places = payload.get("places") if isinstance(payload, dict) else payload
     if not isinstance(raw_places, list):
         raise ValueError("Licensed trends feed must return a places array")
-    places = _normalize_places(raw_places[:num_results], city, country, "licensed_http")
+    places = _normalize_places(
+        raw_places,
+        city,
+        country,
+        "licensed_http",
+        requested_platforms=requested_platforms,
+    )[:num_results]
     if not places:
         raise ValueError("Licensed trends feed returned no usable places")
     return places
@@ -137,9 +158,14 @@ def _fallback_or_raise(
 
 
 def _normalize_places(
-    raw_places: list[Any], city: str, country: str, source: str
+    raw_places: list[Any],
+    city: str,
+    country: str,
+    source: str,
+    *,
+    requested_platforms: tuple[str, ...] = (),
 ) -> list[dict]:
-    places: list[dict] = []
+    places_by_name: dict[str, dict] = {}
     for raw in raw_places:
         if not isinstance(raw, dict):
             continue
@@ -149,20 +175,68 @@ def _normalize_places(
         place_type = str(raw.get("type", "landmark")).lower()
         if place_type not in PLACE_TYPES:
             place_type = "landmark"
-        places.append(
-            {
-                "name": name[:200],
-                "type": place_type,
-                "city": city,
-                "country": country,
-                "description": str(raw.get("description", ""))[:500],
-                "source": str(raw.get("source") or source)[:64],
-                "source_url": str(raw.get("source_url", ""))[:1000] or None,
-                "views": max(int(raw.get("views", 0) or 0), 0),
-                "engagement": max(int(raw.get("engagement", 0) or 0), 0),
-            }
+        platform = str(raw.get("platform", "")).strip().lower()
+        if requested_platforms and platform not in requested_platforms:
+            continue
+        place = {
+            "name": name[:200],
+            "type": place_type,
+            "city": city,
+            "country": country,
+            "description": str(raw.get("description", ""))[:500],
+            "source": (
+                f"social_{platform}" if platform else str(raw.get("source") or source)[:64]
+            ),
+            "source_url": str(raw.get("source_url", ""))[:1000] or None,
+            "views": max(int(raw.get("views", 0) or 0), 0),
+            "engagement": max(int(raw.get("engagement", 0) or 0), 0),
+        }
+        if platform:
+            place["source_platforms"] = [platform]
+        key = _place_key(name)
+        existing = places_by_name.get(key)
+        if existing is None:
+            places_by_name[key] = place
+        else:
+            _merge_social_place(existing, place)
+    return sorted(
+        places_by_name.values(),
+        key=lambda place: (place["views"], place["engagement"]),
+        reverse=True,
+    )
+
+
+def _validate_social_platforms(
+    platforms: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
+    if platforms is None:
+        return ()
+    normalized = tuple(dict.fromkeys(str(platform).strip().lower() for platform in platforms))
+    if not normalized or any(platform not in SOCIAL_PLATFORMS for platform in normalized):
+        raise ValueError(
+            "Social discovery platforms must be TikTok and/or Instagram Reels"
         )
-    return places
+    return normalized
+
+
+def _place_key(name: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+
+
+def _merge_social_place(existing: dict, candidate: dict) -> None:
+    """Merge cross-platform evidence while preserving a single venue candidate."""
+
+    existing["views"] = max(existing["views"], candidate["views"])
+    existing["engagement"] = max(existing["engagement"], candidate["engagement"])
+    platforms = set(existing.get("source_platforms", ()))
+    platforms.update(candidate.get("source_platforms", ()))
+    if platforms:
+        existing["source_platforms"] = sorted(platforms)
+        existing["source"] = "+".join(f"social_{platform}" for platform in sorted(platforms))
+    if not existing.get("source_url") and candidate.get("source_url"):
+        existing["source_url"] = candidate["source_url"]
+    if len(candidate["description"]) > len(existing["description"]):
+        existing["description"] = candidate["description"]
 
 
 def _parse_tiktok_response(data: dict, city: str, country: str) -> list[dict]:

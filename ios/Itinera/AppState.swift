@@ -1,18 +1,25 @@
 import Combine
 import Foundation
+import WidgetKit
 
 enum LocalDataCleanupError: LocalizedError, Sendable {
-    case incomplete
+    case deletionIncomplete
+    case accountSwitchIncomplete
 
     var errorDescription: String? {
-        "Your server data was deleted, but some local files could not be removed. Restart Itinera and clear downloaded trips again."
+        switch self {
+        case .deletionIncomplete:
+            "Your server data was deleted, but some local data could not be removed. Retry Delete all your data to finish cleanup."
+        case .accountSwitchIncomplete:
+            "Your recovered library is active, but some prior local data could not be removed. Restart Itinera and recover the library again."
+        }
     }
 }
 
 @MainActor
 final class AppState: ObservableObject {
     let apiClient: APIClient
-    let tripProgressStore: TripProgressStore
+    private(set) var tripProgressStore: TripProgressStore
 
     @Published private(set) var pendingJobs: [PendingJobRecord] = []
     @Published private(set) var cachedTrips: [SavedItinerary] = []
@@ -21,26 +28,39 @@ final class AppState: ObservableObject {
     @Published private(set) var offlineCacheError: String?
     @Published private(set) var libraryRevision = 0
 
-    private let pendingJobStore: PendingJobStore
-    private let pendingSubmissionStore: PendingSubmissionStore
-    private let completedTripCache: CompletedTripCache
+    private var pendingJobStore: PendingJobStore
+    private var pendingSubmissionStore: PendingSubmissionStore
+    private var completedTripCache: CompletedTripCache
+    private let localDataDefaults: UserDefaults
+    private let widgetSnapshotDefaults: UserDefaults?
+    private let requiresPrincipalScopedStores: Bool
+    private let privateStoreRoot: URL?
+    private var activePrincipalScope: LocalPrincipalScope?
 
     init(
         apiClient: APIClient,
         pendingJobStore: PendingJobStore,
         pendingSubmissionStore: PendingSubmissionStore,
         completedTripCache: CompletedTripCache = .live(),
-        tripProgressStore: TripProgressStore = .live()
+        tripProgressStore: TripProgressStore = .live(),
+        localDataDefaults: UserDefaults = .standard,
+        widgetSnapshotDefaults: UserDefaults? = nil,
+        requiresPrincipalScopedStores: Bool = false,
+        privateStoreRoot: URL? = nil
     ) {
         self.apiClient = apiClient
         self.pendingJobStore = pendingJobStore
         self.pendingSubmissionStore = pendingSubmissionStore
         self.completedTripCache = completedTripCache
         self.tripProgressStore = tripProgressStore
+        self.localDataDefaults = localDataDefaults
+        self.widgetSnapshotDefaults = widgetSnapshotDefaults
+        self.requiresPrincipalScopedStores = requiresPrincipalScopedStores
+        self.privateStoreRoot = privateStoreRoot
     }
 
-    static func live() -> AppState {
-        let configuration = APIConfiguration.live()
+    static func live() throws -> AppState {
+        let configuration = try APIConfiguration.live()
         let session = URLSession(configuration: configuration.makeSessionConfiguration())
         let credentialStore = KeychainCredentialStore()
         let apiClient = APIClient(
@@ -53,12 +73,171 @@ final class AppState: ObservableObject {
             pendingJobStore: .live(),
             pendingSubmissionStore: .live(),
             completedTripCache: .live(),
+            tripProgressStore: .live(),
+            requiresPrincipalScopedStores: true
+        )
+    }
+
+    static func preview() -> AppState {
+        let configuration = APIConfiguration(
+            baseURL: URL(string: "https://example.test")!
+        )
+        return AppState(
+            apiClient: APIClient(
+                configuration: configuration,
+                session: URLSession(
+                    configuration: configuration.makeSessionConfiguration()
+                ),
+                credentialStore: KeychainCredentialStore()
+            ),
+            pendingJobStore: .live(),
+            pendingSubmissionStore: .live(),
+            completedTripCache: .live(),
             tripProgressStore: .live()
         )
     }
 
+    /// Selects the opaque private-store namespace before any production app
+    /// state is read or written. Legacy unscoped files are removed instead of
+    /// being associated with a principal that has not been proven.
+    func activatePrincipalScopedStores() async throws {
+        guard requiresPrincipalScopedStores else { return }
+        let userID = try await apiClient.ensurePrincipalID()
+        guard let scope = LocalPrincipalScope(userID: userID) else {
+            throw APIError.authenticationFailed(
+                "Your session needs recovery before private trips can be opened."
+            )
+        }
+        guard activePrincipalScope != scope else { return }
+
+        if activePrincipalScope == nil {
+            try await completedTripCache.removeAll()
+            try await tripProgressStore.removeAll()
+            try await pendingSubmissionStore.removeAll()
+            _ = try await pendingJobStore.replace(with: [])
+            ItineraLocalDataCleaner.clearTripDraftAndLocks(
+                defaults: localDataDefaults
+            )
+            TripWidgetSnapshotStore.clear(defaults: widgetSnapshotDefaults)
+            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            await TripLiveActivityManager.shared.endAll()
+            await GenerationNotificationManager.shared.removeAllItineraNotifications()
+        }
+
+        pendingJobStore = PendingJobStore.live(
+            scope: scope,
+            root: privateStoreRoot
+        )
+        pendingSubmissionStore = PendingSubmissionStore.live(
+            scope: scope,
+            root: privateStoreRoot
+        )
+        completedTripCache = CompletedTripCache.live(
+            scope: scope,
+            root: privateStoreRoot
+        )
+        tripProgressStore = TripProgressStore.live(
+            scope: scope,
+            root: privateStoreRoot
+        )
+        activePrincipalScope = scope
+        cachedTrips = []
+        pendingJobs = []
+        tripCacheRefreshedAt = nil
+        offlineCacheError = nil
+    }
+
+    func loadTripDraftData() async -> Data? {
+        do {
+            try await activatePrincipalScopedStores()
+            guard let key = privateDefaultsKey(
+                ItineraLocalDataKeys.tripDraft
+            ) else { return nil }
+            return localDataDefaults.data(forKey: key)
+        } catch {
+            return nil
+        }
+    }
+
+    func saveTripDraftData(_ data: Data) async {
+        do {
+            try await activatePrincipalScopedStores()
+            guard let key = privateDefaultsKey(
+                ItineraLocalDataKeys.tripDraft
+            ) else { return }
+            localDataDefaults.set(data, forKey: key)
+        } catch {
+            // A draft is optional and must not fall back to an unscoped key.
+        }
+    }
+
+    func loadLockedActivityIDs(jobID: String) async -> Set<String> {
+        do {
+            try await activatePrincipalScopedStores()
+            guard let key = privateDefaultsKey(
+                ItineraLocalDataKeys.lockedStopsPrefix + jobID
+            ) else { return [] }
+            return Set(localDataDefaults.stringArray(forKey: key) ?? [])
+        } catch {
+            return []
+        }
+    }
+
+    func saveLockedActivityIDs(_ ids: Set<String>, jobID: String) async {
+        do {
+            try await activatePrincipalScopedStores()
+            guard let key = privateDefaultsKey(
+                ItineraLocalDataKeys.lockedStopsPrefix + jobID
+            ) else { return }
+            localDataDefaults.set(Array(ids), forKey: key)
+        } catch {
+            // Locked-stop state is optional and must never use an unscoped key.
+        }
+    }
+
+    func saveWidgetSnapshot(_ snapshot: TripWidgetSnapshot) async -> Bool {
+        do {
+            try await activatePrincipalScopedStores()
+            guard let key = widgetSnapshotKey else { return false }
+            let saved = TripWidgetSnapshotStore.save(
+                snapshot,
+                key: key,
+                defaults: widgetSnapshotDefaults
+            )
+            if saved {
+                WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+            }
+            return saved
+        } catch {
+            return false
+        }
+    }
+
+    func clearWidgetSnapshot() async {
+        do {
+            try await activatePrincipalScopedStores()
+            TripWidgetSnapshotStore.clear(defaults: widgetSnapshotDefaults)
+            WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+        } catch {
+            // The unscoped snapshot is never selected as a fallback.
+        }
+    }
+
+    private func privateDefaultsKey(_ name: String) -> String? {
+        if !requiresPrincipalScopedStores { return name }
+        return activePrincipalScope?.defaultsKey(name: name)
+    }
+
+    private var widgetSnapshotKey: String? {
+        if !requiresPrincipalScopedStores {
+            return "trip-widget-snapshot-v1.default"
+        }
+        return activePrincipalScope?.defaultsKey(name: "trip-widget-snapshot-v1")
+    }
+
     func loadCachedTrips() async {
         do {
+            try await activatePrincipalScopedStores()
             let snapshot = try await completedTripCache.load()
             publishCache(snapshot)
             offlineCacheError = nil
@@ -70,6 +249,7 @@ final class AppState: ObservableObject {
     /// Fetches the authoritative library and updates its protected offline copy.
     /// The caller can continue displaying `cachedTrips` if this throws.
     func refreshTripLibrary() async throws -> [SavedItinerary] {
+        try await activatePrincipalScopedStores()
         let remoteTrips = try await apiClient.savedItineraries(
             includeArchived: true
         )
@@ -88,6 +268,12 @@ final class AppState: ObservableObject {
     /// library metadata when the server is reachable. Generation remains
     /// recoverable offline when the follow-up library request fails.
     func cacheCompletedTrip(jobID: String, itinerary: Itinerary) async {
+        do {
+            try await activatePrincipalScopedStores()
+        } catch {
+            offlineCacheError = "Private offline storage could not be verified for this library."
+            return
+        }
         let trip: SavedItinerary
         do {
             if var authoritative = try await apiClient.savedItineraries()
@@ -124,6 +310,7 @@ final class AppState: ObservableObject {
         expectedVersion: Int,
         operations: [TripRevisionOperation]
     ) async throws -> ItineraryRevisionResponse {
+        try await activatePrincipalScopedStores()
         let response = try await apiClient.reviseTrip(
             jobID,
             expectedVersion: expectedVersion,
@@ -153,6 +340,7 @@ final class AppState: ObservableObject {
         day: Int?,
         expectedVersion: Int
     ) async throws -> ItineraryRevisionResponse {
+        try await activatePrincipalScopedStores()
         let response = try await apiClient.aiEditTrip(
             jobID,
             message: message,
@@ -221,6 +409,7 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func renameTrip(jobID: String, title: String) async throws -> TripMutationResponse {
+        try await activatePrincipalScopedStores()
         let response = try await apiClient.updateTrip(jobID, title: title)
         do {
             let snapshot = try await completedTripCache.rename(
@@ -239,6 +428,7 @@ final class AppState: ObservableObject {
     }
 
     func archiveTrip(jobID: String) async throws {
+        try await activatePrincipalScopedStores()
         let response = try await apiClient.updateTrip(jobID, archived: true)
         do {
             let snapshot = try await completedTripCache.setArchivedAt(
@@ -256,6 +446,7 @@ final class AppState: ObservableObject {
     }
 
     func restoreTrip(_ trip: SavedItinerary) async throws {
+        try await activatePrincipalScopedStores()
         let response = try await apiClient.updateTrip(
             trip.jobId,
             archived: false
@@ -278,6 +469,7 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func duplicateTrip(jobID: String) async throws -> SavedItinerary {
+        try await activatePrincipalScopedStores()
         let duplicate = try await apiClient.duplicateTrip(jobID)
         if duplicate.result != nil {
             do {
@@ -297,6 +489,7 @@ final class AppState: ObservableObject {
     }
 
     func deleteTrip(jobID: String) async throws {
+        try await activatePrincipalScopedStores()
         try await apiClient.deleteTrip(jobID)
         await removeTripFromDeviceCaches(
             jobID: jobID,
@@ -327,6 +520,11 @@ final class AppState: ObservableObject {
     }
 
     func clearDownloadedTripData() async throws {
+        try await activatePrincipalScopedStores()
+        try await clearDownloadedTripDataInCurrentStore()
+    }
+
+    private func clearDownloadedTripDataInCurrentStore() async throws {
         var cleanupFailed = false
         do {
             try await completedTripCache.removeAll()
@@ -342,19 +540,54 @@ final class AppState: ObservableObject {
         tripCacheRefreshedAt = nil
         offlineCacheError = nil
         if cleanupFailed {
-            throw LocalDataCleanupError.incomplete
+            throw LocalDataCleanupError.deletionIncomplete
         }
     }
 
     func deleteMyData() async throws {
+        try await activatePrincipalScopedStores()
         try await apiClient.deleteMyData()
+        try await clearLocalAccountState(failure: .deletionIncomplete)
+        localDataDefaults.removeObject(
+            forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+        )
+        do {
+            try await apiClient.finalizeDeletedAccountOnDevice()
+        } catch {
+            throw LocalDataCleanupError.deletionIncomplete
+        }
+    }
 
-        // The server deletion has already committed. Attempt every local
-        // cleanup independently so one corrupt file cannot leave other trip
-        // data or scheduled notifications behind.
+    func connectAppleAccount(identityToken: String) async throws {
+        let outcome = try await apiClient.connectAppleAccount(identityToken: identityToken)
+        let requiresRecoveryCleanup = outcome == .recoveredExistingLibrary
+            || localDataDefaults.bool(
+                forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+            )
+        if requiresRecoveryCleanup {
+            localDataDefaults.set(
+                true,
+                forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+            )
+            try await clearLocalAccountState(failure: .accountSwitchIncomplete)
+            localDataDefaults.removeObject(
+                forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+            )
+        }
+        try await activatePrincipalScopedStores()
+        _ = try await refreshTripLibrary()
+        markLibraryChanged()
+    }
+
+    /// Removes device state owned by the current principal before a destructive
+    /// account transition. Each operation is attempted so a corrupt local file
+    /// cannot preserve other private state.
+    private func clearLocalAccountState(
+        failure: LocalDataCleanupError
+    ) async throws {
         var cleanupFailed = false
         do {
-            try await clearDownloadedTripData()
+            try await clearDownloadedTripDataInCurrentStore()
         } catch {
             cleanupFailed = true
         }
@@ -369,24 +602,34 @@ final class AppState: ObservableObject {
             pendingJobs = []
             cleanupFailed = true
         }
-        ItineraLocalDataCleaner.clearTripDraftAndLocks()
+        if let tripDraftKey = privateDefaultsKey(
+            ItineraLocalDataKeys.tripDraft
+        ), let lockedStopsPrefix = privateDefaultsKey(
+            ItineraLocalDataKeys.lockedStopsPrefix
+        ) {
+            ItineraLocalDataCleaner.clearTripDraftAndLocks(
+                defaults: localDataDefaults,
+                tripDraftKey: tripDraftKey,
+                lockedStopsPrefix: lockedStopsPrefix
+            )
+        } else {
+            cleanupFailed = true
+        }
         await GenerationNotificationManager.shared.removeAllItineraNotifications()
+        TripWidgetSnapshotStore.clear(defaults: widgetSnapshotDefaults)
+        WidgetCenter.shared.reloadTimelines(ofKind: ItineraWidgetKind.nextStop)
+        await TripLiveActivityManager.shared.endAll()
 
         persistenceError = nil
         markLibraryChanged()
         if cleanupFailed {
-            throw LocalDataCleanupError.incomplete
+            throw failure
         }
-    }
-
-    func connectAppleAccount(identityToken: String) async throws {
-        try await apiClient.connectAppleAccount(identityToken: identityToken)
-        _ = try await refreshTripLibrary()
-        markLibraryChanged()
     }
 
     func loadPendingJobs() async {
         do {
+            try await activatePrincipalScopedStores()
             pendingJobs = try await pendingJobStore.all()
             persistenceError = nil
         } catch {
@@ -396,6 +639,7 @@ final class AppState: ObservableObject {
 
     func registerPending(jobID: String, title: String? = nil) async {
         do {
+            try await activatePrincipalScopedStores()
             pendingJobs = try await pendingJobStore.add(jobID: jobID, title: title)
             persistenceError = nil
         } catch {
@@ -407,6 +651,7 @@ final class AppState: ObservableObject {
         _ request: GenerateItineraryRequest,
         title: String
     ) async throws -> JobAccepted {
+        try await activatePrincipalScopedStores()
         let submission = try await pendingSubmissionStore.record(
             for: request,
             title: title
@@ -434,9 +679,18 @@ final class AppState: ObservableObject {
         return accepted
     }
 
+    func grantAIConsent(version: Int) async throws {
+        try await apiClient.grantAIConsent(version: version)
+    }
+
+    func withdrawAIConsent() async throws {
+        try await apiClient.withdrawAIConsent()
+    }
+
     func resumePendingSubmissions() async {
         let submissions: [PendingSubmissionRecord]
         do {
+            try await activatePrincipalScopedStores()
             submissions = try await pendingSubmissionStore.all()
         } catch {
             persistenceError = "Pending trip submissions could not be loaded."
@@ -467,6 +721,7 @@ final class AppState: ObservableObject {
 
     func resolvePending(jobID: String) async {
         do {
+            try await activatePrincipalScopedStores()
             pendingJobs = try await pendingJobStore.remove(jobID: jobID)
             persistenceError = nil
         } catch {
@@ -476,6 +731,7 @@ final class AppState: ObservableObject {
 
     func reconcilePending(with remoteTrips: [SavedItinerary]) async {
         do {
+            try await activatePrincipalScopedStores()
             var recordsByID: [String: PendingJobRecord] = [:]
             for record in try await pendingJobStore.all() {
                 recordsByID[record.jobID] = record

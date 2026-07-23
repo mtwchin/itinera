@@ -48,28 +48,54 @@ struct TripToolsView: View {
                         ItineraStatusBanner(message: errorMessage, kind: .warning)
                     }
 
-                    Picker("Trip tools", selection: $selectedSection) {
-                        ForEach(Section.allCases) { section in
-                            Text(section.rawValue).tag(section)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Section.allCases) { section in
+                                Button {
+                                    withAnimation(.snappy) { selectedSection = section }
+                                } label: {
+                                    Text(section.rawValue)
+                                        .font(.subheadline.weight(selectedSection == section ? .semibold : .regular))
+                                        .foregroundStyle(selectedSection == section ? .white : theme.primaryText)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            selectedSection == section
+                                                ? theme.accent
+                                                : theme.accent.opacity(0.09),
+                                            in: Capsule()
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
+                        .padding(.horizontal, 1)
                     }
-                    .pickerStyle(.segmented)
+                    .sensoryFeedback(.selection, trigger: selectedSection)
 
-                    switch selectedSection {
-                    case .essentials: essentialsSection
-                    case .checklist: checklistSection
-                    case .expenses: expensesSection
-                    case .people: peopleSection
+                    if isLoading {
+                        ForEach(0..<4, id: \.self) { i in
+                            ItineraSkeletonRow()
+                                .opacity(1 - Double(i) * 0.15)
+                        }
+                    } else {
+                        VStack(alignment: .leading) {
+                            switch selectedSection {
+                            case .essentials: essentialsSection
+                            case .checklist: checklistSection
+                            case .expenses: expensesSection
+                            case .people: peopleSection
+                            }
+                        }
+                        .id(selectedSection)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .leading).combined(with: .opacity)
+                        ))
                     }
                 }
                 .padding(18)
                 .padding(.bottom, 28)
-            }
-
-            if isLoading {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(theme.route)
             }
         }
         .navigationTitle("Trip tools")
@@ -125,8 +151,7 @@ struct TripToolsView: View {
                     Label("Add manually", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(theme.accent)
+                .buttonStyle(ItineraPrimaryButtonStyle())
 
                 Button {
                     isImportingReservation = true
@@ -177,6 +202,7 @@ struct TripToolsView: View {
                         }
                     }
                 }
+                .revealOnAppear()
             }
         }
     }
@@ -197,12 +223,19 @@ struct TripToolsView: View {
                         Task { await addChecklistItem() }
                     } label: {
                         Image(systemName: "plus")
+                            .font(.headline)
+                            .foregroundStyle(theme.accentContrast)
                             .frame(width: 44, height: 44)
+                            .background(theme.accent, in: RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(theme.accent)
+                    .buttonStyle(.plain)
                     .disabled(checklistTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(checklistTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.48 : 1)
                 }
+            }
+
+            if checklist.isEmpty {
+                emptyCard("No checklist items yet", icon: "checklist")
             }
 
             ForEach(checklist.sorted { $0.position < $1.position }) { item in
@@ -214,19 +247,28 @@ struct TripToolsView: View {
                             Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                                 .font(.title2)
                                 .foregroundStyle(item.isCompleted ? theme.success : theme.secondaryText)
+                                .scaleEffect(item.isCompleted ? 1.08 : 1)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: item.isCompleted)
                         }
                         .buttonStyle(.plain)
+                        .sensoryFeedback(item.isCompleted ? .selection : .success, trigger: item.isCompleted)
                         Text(item.title)
-                            .foregroundStyle(theme.primaryText)
-                            .strikethrough(item.isCompleted)
+                            .foregroundStyle(item.isCompleted ? theme.secondaryText : theme.primaryText)
+                            .strikethrough(item.isCompleted, color: theme.secondaryText)
+                            .animation(.easeInOut(duration: 0.2), value: item.isCompleted)
                         Spacer()
-                        Button(role: .destructive) {
-                            Task { await deleteChecklistItem(item) }
-                        } label: {
-                            Image(systemName: "trash")
+                        if !item.isCompleted {
+                            Button(role: .destructive) {
+                                Task { await deleteChecklistItem(item) }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(theme.danger.opacity(0.7))
+                            }
                         }
                     }
                 }
+                .opacity(item.isCompleted ? 0.65 : 1)
+                .animation(.easeInOut(duration: 0.25), value: item.isCompleted)
             }
         }
     }
@@ -254,7 +296,10 @@ struct TripToolsView: View {
                 ItineraSurface(padding: 14) {
                     HStack(spacing: 12) {
                         Image(systemName: "banknote.fill")
-                            .foregroundStyle(theme.route)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(theme.success)
+                            .frame(width: 38, height: 38)
+                            .background(theme.success.opacity(0.12), in: Circle())
                         VStack(alignment: .leading, spacing: 3) {
                             Text(expense.title)
                                 .font(.headline)
@@ -276,6 +321,7 @@ struct TripToolsView: View {
                         }
                     }
                 }
+                .revealOnAppear()
             }
         }
     }
@@ -297,15 +343,20 @@ struct TripToolsView: View {
 
             if let latestInvite {
                 ItineraSurface {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Invite ready")
-                            .font(.headline)
-                        Text("This link expires at \(latestInvite.expiresAt).")
-                            .font(.caption)
-                            .foregroundStyle(theme.secondaryText)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Invite ready")
+                                .font(.headline)
+                                .foregroundStyle(theme.primaryText)
+                            Spacer()
+                            Label("Expires \(latestInvite.expiresAt)", systemImage: "clock.badge.exclamationmark")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(theme.warning)
+                        }
                         ShareLink(item: "itinera://invite/\(latestInvite.token)") {
                             Label("Share private invite", systemImage: "square.and.arrow.up")
                         }
+                        .buttonStyle(ItineraPrimaryButtonStyle())
                     }
                 }
             }
@@ -313,17 +364,35 @@ struct TripToolsView: View {
             if !collaborators.isEmpty {
                 ForEach(collaborators) { collaborator in
                     ItineraSurface(padding: 14) {
-                        HStack {
-                            Label(collaborator.role.capitalized, systemImage: "person.crop.circle")
-                                .foregroundStyle(theme.primaryText)
+                        HStack(spacing: 12) {
+                            let isEditor = collaborator.role == "editor"
+                            Image(systemName: isEditor ? "pencil.circle.fill" : "eye.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(isEditor ? theme.accent : theme.route)
+                                .frame(width: 38, height: 38)
+                                .background(
+                                    (isEditor ? theme.accent : theme.route).opacity(0.10),
+                                    in: Circle()
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(collaborator.role.capitalized)
+                                    .font(.headline)
+                                    .foregroundStyle(theme.primaryText)
+                                Text(isEditor ? "Can edit this trip" : "View-only access")
+                                    .font(.caption)
+                                    .foregroundStyle(theme.secondaryText)
+                            }
                             Spacer()
                             Button(role: .destructive) {
                                 Task { await removeCollaborator(collaborator) }
                             } label: {
-                                Text("Remove")
+                                Image(systemName: "xmark.circle")
+                                    .foregroundStyle(theme.danger.opacity(0.7))
                             }
+                            .accessibilityLabel("Remove \(collaborator.role) access")
                         }
                     }
+                    .revealOnAppear()
                 }
             }
 
@@ -335,11 +404,14 @@ struct TripToolsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .itineraField()
-                    Button("Join trip") {
+                    Button {
                         Task { await acceptInvite() }
+                    } label: {
+                        Label("Join trip", systemImage: "link.badge.plus")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(ItineraPrimaryButtonStyle())
                     .disabled(inviteToken.count < 32)
+                    .opacity(inviteToken.count < 32 ? 0.48 : 1)
                 }
             }
         }
@@ -347,9 +419,18 @@ struct TripToolsView: View {
 
     private func emptyCard(_ message: String, icon: String) -> some View {
         ItineraSurface {
-            Label(message, systemImage: icon)
-                .foregroundStyle(theme.secondaryText)
-                .frame(maxWidth: .infinity, minHeight: 52)
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(theme.route.opacity(0.6))
+                    .frame(width: 36, height: 36)
+                    .background(theme.route.opacity(0.08), in: Circle())
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(theme.primaryText.opacity(0.55))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
         }
     }
 
@@ -525,29 +606,72 @@ private struct ReservationFormView: View {
     let onSave: () -> Void
 
     var body: some View {
-        Form {
-            Section("Reservation") {
-                TextField("Title", text: $draft.title)
-                TextField("Confirmation code", text: $draft.confirmationCode)
-                    .textInputAutocapitalization(.characters)
-                TextField("Address", text: $draft.address)
-                TextField("Reservation URL", text: $draft.url)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                TextField("Notes", text: $draft.notes, axis: .vertical)
-                    .lineLimit(3...6)
-            }
-            Section("Timing") {
-                Toggle("Include date and time", isOn: $draft.includesTime)
-                if draft.includesTime {
-                    DatePicker("Starts", selection: $draft.startsAt)
-                    DatePicker("Ends", selection: $draft.endsAt, in: draft.startsAt...)
+        ZStack {
+            ItineraBackground()
+            ScrollView {
+                VStack(spacing: 18) {
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "01", title: "Reservation details", message: nil)
+
+                            TextField("Title", text: $draft.title)
+                                .itineraField()
+
+                            TextField("Confirmation code", text: $draft.confirmationCode)
+                                .textInputAutocapitalization(.characters)
+                                .itineraField()
+
+                            TextField("Address", text: $draft.address)
+                                .itineraField()
+
+                            TextField("Reservation URL", text: $draft.url)
+                                .textInputAutocapitalization(.never)
+                                .keyboardType(.URL)
+                                .itineraField()
+
+                            TextField("Notes", text: $draft.notes, axis: .vertical)
+                                .lineLimit(3...6)
+                                .itineraField()
+                        }
+                    }
+
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "02", title: "Timing", message: nil)
+
+                            Toggle("Include date and time", isOn: $draft.includesTime)
+                                .tint(theme.accent)
+
+                            if draft.includesTime {
+                                HStack {
+                                    Text("Starts")
+                                        .font(.subheadline)
+                                        .foregroundStyle(theme.primaryText)
+                                    Spacer()
+                                    DatePicker("Starts", selection: $draft.startsAt)
+                                        .labelsHidden()
+                                        .tint(theme.accent)
+                                }
+                                HStack {
+                                    Text("Ends")
+                                        .font(.subheadline)
+                                        .foregroundStyle(theme.primaryText)
+                                    Spacer()
+                                    DatePicker("Ends", selection: $draft.endsAt, in: draft.startsAt...)
+                                        .labelsHidden()
+                                        .tint(theme.accent)
+                                }
+                            }
+                        }
+                    }
                 }
+                .padding(18)
+                .padding(.bottom, 24)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
-        .scrollContentBackground(.hidden)
-        .background(ItineraBackground())
         .navigationTitle("Review reservation")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
@@ -571,21 +695,55 @@ private struct ExpenseFormView: View {
     let onSave: (TripExpenseCreate) -> Void
 
     var body: some View {
-        Form {
-            Section("Expense") {
-                TextField("Title", text: $title)
-                TextField("Amount", text: $amount)
-                    .keyboardType(.decimalPad)
-                TextField("Currency (USD)", text: $currency)
-                    .textInputAutocapitalization(.characters)
-                TextField("Category", text: $category)
-                TextField("Paid by", text: $paidBy)
-                TextField("Notes", text: $notes, axis: .vertical)
+        ZStack {
+            ItineraBackground()
+            ScrollView {
+                VStack(spacing: 18) {
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "01", title: "Expense details", message: nil)
+
+                            TextField("Title", text: $title)
+                                .itineraField()
+
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Amount")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(theme.secondaryText)
+                                    TextField("0.00", text: $amount)
+                                        .keyboardType(.decimalPad)
+                                        .itineraField()
+                                }
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Currency")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(theme.secondaryText)
+                                    TextField("USD", text: $currency)
+                                        .textInputAutocapitalization(.characters)
+                                        .itineraField()
+                                }
+                            }
+
+                            TextField("Category (optional)", text: $category)
+                                .itineraField()
+
+                            TextField("Paid by (optional)", text: $paidBy)
+                                .itineraField()
+
+                            TextField("Notes (optional)", text: $notes, axis: .vertical)
+                                .lineLimit(2...5)
+                                .itineraField()
+                        }
+                    }
+                }
+                .padding(18)
+                .padding(.bottom, 24)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
-        .scrollContentBackground(.hidden)
-        .background(ItineraBackground())
         .navigationTitle("Add expense")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
@@ -618,23 +776,61 @@ private struct ExpenseFormView: View {
 
 private struct InviteFormView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.itineraTheme) private var theme
     @State private var email = ""
     @State private var role = "viewer"
     let onCreate: (String?, String) -> Void
 
     var body: some View {
-        Form {
-            Section("Private invite") {
-                TextField("Email (optional)", text: $email)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                Picker("Permission", selection: $role) {
-                    Text("Can view").tag("viewer")
-                    Text("Can edit").tag("editor")
+        ZStack {
+            ItineraBackground()
+            ScrollView {
+                VStack(spacing: 18) {
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "01", title: "Invite details", message: nil)
+
+                            TextField("Email (optional)", text: $email)
+                                .keyboardType(.emailAddress)
+                                .textInputAutocapitalization(.never)
+                                .itineraField()
+                                .accessibilityLabel("Email address (optional)")
+
+                            VStack(alignment: .leading, spacing: 9) {
+                                Text("Permission")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(theme.secondaryText)
+                                HStack(spacing: 8) {
+                                    ForEach([("viewer", "Can view"), ("editor", "Can edit")], id: \.0) { roleValue, roleLabel in
+                                        Button {
+                                            withAnimation(.snappy) { role = roleValue }
+                                        } label: {
+                                            Text(roleLabel)
+                                                .font(.subheadline.weight(role == roleValue ? .semibold : .regular))
+                                                .foregroundStyle(role == roleValue ? .white : theme.primaryText)
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 8)
+                                                .background(
+                                                    role == roleValue ? theme.accent : theme.accent.opacity(0.09),
+                                                    in: Capsule()
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel(roleLabel)
+                                        .accessibilityAddTraits(role == roleValue ? .isSelected : [])
+                                    }
+                                }
+                                .sensoryFeedback(.selection, trigger: role)
+                            }
+                        }
+                    }
                 }
+                .padding(18)
+                .padding(.bottom, 24)
             }
         }
         .navigationTitle("Invite tripmate")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {

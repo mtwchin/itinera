@@ -55,15 +55,31 @@ actor TripProgressStore {
     }
 
     static func live() -> TripProgressStore {
-        let root = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let root = storageRoot()
         return TripProgressStore(
             fileURL: root
                 .appending(path: "Itinera", directoryHint: .isDirectory)
                 .appending(path: "trip-progress-v1.json")
         )
+    }
+
+    static func live(
+        scope: LocalPrincipalScope,
+        root: URL? = nil
+    ) -> TripProgressStore {
+        TripProgressStore(
+            fileURL: scope.fileURL(
+                root: root ?? storageRoot(),
+                name: "trip-progress-v1.json"
+            )
+        )
+    }
+
+    private static func storageRoot() -> URL {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
     }
 
     func progress(for tripID: String) throws -> [TripStopID: TripStopStatus] {

@@ -20,6 +20,16 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=5,
     task_default_max_retries=3,
+    broker_transport_options={
+        "visibility_timeout": _settings.celery_broker_visibility_timeout_seconds
+    },
+    result_backend_transport_options={
+        "visibility_timeout": _settings.celery_broker_visibility_timeout_seconds
+    },
+    # The task decorator receives the same explicit limits. Keeping them in
+    # app configuration makes the bound visible to Celery inspection tooling.
+    task_soft_time_limit=_settings.itinerary_job_soft_time_limit_seconds,
+    task_time_limit=_settings.itinerary_job_time_limit_seconds,
     task_store_errors_even_if_ignored=False,
     # Matches the historical Celery default. Keeping it explicit makes the
     # one-time legacy result-key drain window operationally auditable.

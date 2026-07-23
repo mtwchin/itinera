@@ -18,84 +18,83 @@ struct TodayTimingPanel: View {
             adaptiveHeader
             Divider().overlay(theme.border.opacity(0.7))
 
-            switch state {
-            case .route(let estimate):
-                if let fixedCurrentTime {
-                    routeContent(
-                        estimate,
-                        currentTime: fixedCurrentTime
-                    )
-                } else {
-                    TimelineView(
-                        .periodic(from: estimate.checkedAt, by: 60)
-                    ) { timeline in
+            VStack(alignment: .leading, spacing: 14) {
+                switch state {
+                case .route(let estimate):
+                    if let fixedCurrentTime {
                         routeContent(
                             estimate,
-                            currentTime: timeline.date
+                            currentTime: fixedCurrentTime
                         )
+                    } else {
+                        TimelineView(
+                            .periodic(from: estimate.checkedAt, by: 60)
+                        ) { timeline in
+                            routeContent(
+                                estimate,
+                                currentTime: timeline.date
+                            )
+                        }
                     }
-                }
-            case .checking(let context):
-                plannedContent(start: context.plannedStart)
-                Label {
-                    Text(
-                        "Checking the \(modeName(context.mode).lowercased()) planned leg from \(context.originName) to \(context.destinationName)…"
+                case .checking(let context):
+                    plannedContent(start: context.plannedStart)
+                    Label {
+                        Text(
+                            "Checking the \(modeName(context.mode).lowercased()) planned leg from \(context.originName) to \(context.destinationName)…"
+                        )
+                    } icon: {
+                        ProgressView()
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(theme.secondaryText)
+                    .accessibilityLabel(
+                        "Checking the \(modeName(context.mode).lowercased()) planned route from \(context.originName) to \(context.destinationName)"
                     )
-                } icon: {
-                    ProgressView()
-                }
-                .font(.footnote)
-                .foregroundStyle(theme.secondaryText)
-                .accessibilityLabel(
-                    "Checking the \(modeName(context.mode).lowercased()) planned route from \(context.originName) to \(context.destinationName)"
-                )
-            case .unavailable(let context):
-                plannedContent(start: context.plannedStart)
-                ItineraStatusBanner(
-                    message: "Apple Maps couldn't check the \(modeName(context.mode).lowercased()) planned leg from \(context.originName) to \(context.destinationName). Your plan hasn't changed.",
-                    kind: .warning
-                )
-                retryButton
-            case .planned(let timing):
-                plannedContent(start: timing.plannedStart)
-                Text(plannedExplanation(timing))
-                    .font(.footnote)
-                    .foregroundStyle(theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                if timing.reason == .notChecked {
+                case .unavailable(let context):
+                    plannedContent(start: context.plannedStart)
+                    ItineraStatusBanner(
+                        message: "Apple Maps couldn't check the \(modeName(context.mode).lowercased()) planned leg from \(context.originName) to \(context.destinationName). Your plan hasn't changed.",
+                        kind: .warning
+                    )
                     retryButton
+                case .planned(let timing):
+                    plannedContent(start: timing.plannedStart)
+                    Text(plannedExplanation(timing))
+                        .font(.footnote)
+                        .foregroundStyle(theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if timing.reason == .notChecked {
+                        retryButton
+                    }
+                case .idle:
+                    Text("No timing is needed for this stop.")
+                        .font(.footnote)
+                        .foregroundStyle(theme.secondaryText)
                 }
-            case .idle:
-                Text("No timing is needed for this stop.")
-                    .font(.footnote)
-                    .foregroundStyle(theme.secondaryText)
             }
+            .id(stateToken)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .animation(.easeInOut(duration: 0.22), value: stateToken)
 
             Button(action: onAdjust) {
-                HStack(spacing: 12) {
-                    Image(systemName: "clock.badge.exclamationmark")
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Running late?")
-                            .font(.headline)
-                        Text("Review today's options")
-                            .font(.caption)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
+                Label("Running late? Review today's plan", systemImage: "clock.badge.exclamationmark")
             }
-            .buttonStyle(.bordered)
-            .tint(theme.highlightStrong)
-            .accessibilityLabel("Running late? Review today's options")
+            .buttonStyle(ItineraPrimaryButtonStyle())
             .accessibilityHint(
                 "Explains adjustment choices. Opening it does not change the itinerary."
             )
         }
         .environment(\.timeZone, timeZone)
+    }
+
+    private var stateToken: String {
+        switch state {
+        case .route: return "route"
+        case .checking: return "checking"
+        case .unavailable: return "unavailable"
+        case .planned: return "planned"
+        case .idle: return "idle"
+        }
     }
 
     @ViewBuilder

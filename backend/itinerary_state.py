@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.db.models import Itinerary
+from backend.schemas.errors import public_generation_failure
 from backend.schemas.itinerary import JobStatusResponse
 
 
@@ -11,10 +12,17 @@ def itinerary_stream_channel(job_id: str) -> str:
 def status_from_row(row: Itinerary) -> JobStatusResponse:
     """Build the public state exclusively from the authorized durable row."""
 
+    failure = (
+        public_generation_failure(row.failure_code)
+        if row.status.value == "failed"
+        else None
+    )
+
     return JobStatusResponse(
         job_id=row.job_id,
         status=row.status.value,
         result=row.result,
-        error=row.error,
+        error=failure.message if failure is not None else None,
+        error_code=failure.code if failure is not None else None,
         version=row.version or 1,
     )

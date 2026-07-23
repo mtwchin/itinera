@@ -360,6 +360,7 @@ def test_revision_rejects_out_of_range_activity_without_partial_mutation():
 @pytest.fixture
 def trip_client():
     session = AsyncMock()
+    session.add = MagicMock()
     user = User(id=uuid.uuid4())
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[current_user] = lambda: user
@@ -383,6 +384,83 @@ def itinerary_row(user: User) -> Itinerary:
         version=2,
         created_at=datetime.now(timezone.utc),
     )
+
+
+def test_ai_edit_fails_closed_without_server_recorded_consent(trip_client):
+    client, session, _ = trip_client
+
+    response = client.post(
+        "/api/v1/itineraries/trip-1/ai-edit",
+        json={"message": "Move lunch later", "expected_version": 1},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ai_consent_required"
+    session.execute.assert_not_awaited()
+
+
+def test_ai_edit_hides_provider_failures_from_the_client(trip_client):
+    client, session, user = trip_client
+    row = itinerary_row(user)
+    provider_detail = "provider credential rejected: secret-value"
+
+    with patch(
+        "backend.ai_consent.require_current_ai_consent", new_callable=AsyncMock
+    ), patch(
+        "backend.routers.trips.get_itinerary_with_access",
+        new_callable=AsyncMock,
+        return_value=row,
+    ), patch(
+        "backend.agents.editor.generate_fn_for_settings",
+        return_value=MagicMock(side_effect=RuntimeError(provider_detail)),
+    ):
+        response = client.post(
+            "/api/v1/itineraries/trip-1/ai-edit",
+            json={"message": "Move lunch later", "expected_version": 2},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "AI editing is temporarily unavailable. Please try again later."
+    )
+    assert provider_detail not in response.text
+    session.commit.assert_awaited_once()
+    session.add.assert_called_once()
+
+
+def test_ai_edit_hides_invalid_model_output_from_the_client(trip_client):
+    from backend.agents.editor import AIEditorError
+
+    client, session, user = trip_client
+    row = itinerary_row(user)
+    private_detail = "invalid activity address: guest's private hotel"
+
+    with patch(
+        "backend.ai_consent.require_current_ai_consent", new_callable=AsyncMock
+    ), patch(
+        "backend.routers.trips.get_itinerary_with_access",
+        new_callable=AsyncMock,
+        return_value=row,
+    ), patch(
+        "backend.agents.editor.generate_fn_for_settings",
+        return_value=MagicMock(),
+    ), patch(
+        "backend.agents.editor.apply_ai_edit",
+        side_effect=AIEditorError(private_detail),
+    ):
+        response = client.post(
+            "/api/v1/itineraries/trip-1/ai-edit",
+            json={"message": "Move lunch later", "expected_version": 2},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "The requested AI edit could not be applied. "
+        "Please try a more specific change."
+    )
+    assert private_detail not in response.text
+    session.commit.assert_awaited_once()
+    session.add.assert_called_once()
 
 
 def test_trip_rename_and_archive_are_owner_scoped(trip_client):
@@ -688,8 +766,8 @@ async def test_delete_user_data_prelocks_child_writers_before_bulk_delete():
     deleted = await delete_user_data(session, user=user)
 
     assert deleted is None
-    assert session.execute.await_count == 3
-    itinerary_lock, refresh_lock, delete_statement = [
+    assert session.execute.await_count == 4
+    itinerary_lock, refresh_lock, consent_lock, delete_statement = [
         awaited.args[0] for awaited in session.execute.await_args_list
     ]
     compiled_itinerary_lock = str(
@@ -707,6 +785,13 @@ async def test_delete_user_data_prelocks_child_writers_before_bulk_delete():
         "ORDER BY guest_refresh_tokens.created_at, guest_refresh_tokens.id "
         "FOR UPDATE OF guest_refresh_tokens"
         in compiled_refresh_lock
+    )
+    compiled_consent_lock = str(consent_lock.compile(dialect=postgresql.dialect()))
+    assert "FROM ai_consent_events" in compiled_consent_lock
+    assert (
+        "ORDER BY ai_consent_events.recorded_at, ai_consent_events.id "
+        "FOR UPDATE OF ai_consent_events"
+        in compiled_consent_lock
     )
     assert compiled_delete.startswith("DELETE FROM users")
     assert "itineraries" not in compiled_delete

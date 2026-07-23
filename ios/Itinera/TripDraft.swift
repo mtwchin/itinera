@@ -3,13 +3,18 @@ import Foundation
 enum ItineraLocalDataKeys {
     static let tripDraft = "itinera.tripDraft.v1"
     static let lockedStopsPrefix = "trip.lockedStops."
+    static let pendingAppleRecoveryCleanup = "itinera.pendingAppleRecoveryCleanup.v1"
 }
 
 enum ItineraLocalDataCleaner {
-    static func clearTripDraftAndLocks(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: ItineraLocalDataKeys.tripDraft)
+    static func clearTripDraftAndLocks(
+        defaults: UserDefaults = .standard,
+        tripDraftKey: String = ItineraLocalDataKeys.tripDraft,
+        lockedStopsPrefix: String = ItineraLocalDataKeys.lockedStopsPrefix
+    ) {
+        defaults.removeObject(forKey: tripDraftKey)
         for key in defaults.dictionaryRepresentation().keys
-            where key.hasPrefix(ItineraLocalDataKeys.lockedStopsPrefix) {
+            where key.hasPrefix(lockedStopsPrefix) {
             defaults.removeObject(forKey: key)
         }
     }

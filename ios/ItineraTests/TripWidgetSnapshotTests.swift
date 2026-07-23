@@ -65,6 +65,45 @@ final class TripWidgetSnapshotTests: XCTestCase {
         XCTAssertNil(TripWidgetSnapshotStore.load(defaults: defaults))
     }
 
+    func testOnlyTheSelectedOpaqueSnapshotIsVisibleToTheWidget() throws {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let first = TripWidgetSnapshot(
+            tripID: "trip-a",
+            tripTitle: "First traveler",
+            dayNumber: 1,
+            stopNumber: 1,
+            totalStops: 2,
+            currentStop: nil,
+            nextStop: "Private first stop",
+            leaveBy: nil,
+            progress: 0
+        )
+        let second = TripWidgetSnapshot(
+            tripID: "trip-b",
+            tripTitle: "Second traveler",
+            dayNumber: 1,
+            stopNumber: 2,
+            totalStops: 3,
+            currentStop: "Private second stop",
+            nextStop: "Another private stop",
+            leaveBy: nil,
+            progress: 0.5
+        )
+        let firstKey = "trip-widget-snapshot-v1.opaque-first"
+        let secondKey = "trip-widget-snapshot-v1.opaque-second"
+
+        XCTAssertTrue(TripWidgetSnapshotStore.save(first, key: firstKey, defaults: defaults))
+        XCTAssertTrue(TripWidgetSnapshotStore.save(second, key: secondKey, defaults: defaults))
+        XCTAssertEqual(TripWidgetSnapshotStore.load(defaults: defaults), second)
+
+        TripWidgetSnapshotStore.clear(key: firstKey, defaults: defaults)
+        XCTAssertEqual(TripWidgetSnapshotStore.load(defaults: defaults), second)
+
+        TripWidgetSnapshotStore.clear(defaults: defaults)
+        XCTAssertNil(TripWidgetSnapshotStore.load(defaults: defaults))
+    }
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suiteName = "TripWidgetSnapshotTests.\(UUID().uuidString)"
         return (UserDefaults(suiteName: suiteName)!, suiteName)

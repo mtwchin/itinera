@@ -1,6 +1,83 @@
 {
   "components": {
     "schemas": {
+      "AIConsentRequest": {
+        "properties": {
+          "version": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "AIConsentRequest",
+        "type": "object"
+      },
+      "AIConsentResponse": {
+        "properties": {
+          "action": {
+            "enum": [
+              "granted",
+              "withdrawn"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "action",
+          "recorded_at"
+        ],
+        "title": "AIConsentResponse",
+        "type": "object"
+      },
+      "AIEditRequest": {
+        "properties": {
+          "day": {
+            "anyOf": [
+              {
+                "maximum": 30.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "expected_version"
+        ],
+        "title": "AIEditRequest",
+        "type": "object"
+      },
       "Accommodation": {
         "properties": {
           "address": {
@@ -1277,12 +1354,14 @@
           },
           "operations": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Operations",
             "type": "array"
           },
           "result": {
+            "additionalProperties": true,
             "title": "Result",
             "type": "object"
           },
@@ -1343,6 +1422,21 @@
               }
             ],
             "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generation_failed",
+                  "generation_unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
           },
           "job_id": {
             "title": "Job Id",
@@ -2137,6 +2231,21 @@
             ],
             "title": "Error"
           },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generation_failed",
+                  "generation_unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
           "job_id": {
             "title": "Job Id",
             "type": "string"
@@ -2363,6 +2472,76 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/auth/ai-consent": {
+      "delete": {
+        "operationId": "withdraw_ai_consent_api_v1_auth_ai_consent_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIConsentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Withdraw Ai Consent",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "grant_ai_consent_api_v1_auth_ai_consent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIConsentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIConsentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grant Ai Consent",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/apple": {
       "post": {
         "operationId": "sign_in_with_apple_api_v1_auth_apple_post",
@@ -2938,6 +3117,63 @@
           }
         ],
         "summary": "Update Trip",
+        "tags": [
+          "trip-management"
+        ]
+      }
+    },
+    "/api/v1/itineraries/{job_id}/ai-edit": {
+      "post": {
+        "operationId": "ai_edit_trip_api_v1_itineraries__job_id__ai_edit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItineraryRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ai Edit Trip",
         "tags": [
           "trip-management"
         ]
@@ -4273,23 +4509,6 @@
         "tags": [
           "health"
         ]
-      }
-    },
-    "/metrics": {
-      "get": {
-        "description": "Endpoint that serves Prometheus metrics.",
-        "operationId": "metrics_metrics_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Metrics"
       }
     },
     "/readyz": {

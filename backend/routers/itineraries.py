@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 
+from backend.ai_consent import require_current_ai_consent
 from backend.admission import (
     CoordinationUnavailableError,
     acquire_stream_lease,
@@ -271,6 +272,7 @@ async def create_itinerary(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Idempotency-Key cannot be blank",
         )
+    await require_current_ai_consent(session, user.id)
 
     request = payload.model_dump(mode="json")
     try:

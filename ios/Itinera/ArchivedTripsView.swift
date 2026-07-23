@@ -27,11 +27,30 @@ struct ArchivedTripsView: View {
 
                     if trips.isEmpty && !isLoading {
                         ItineraSurface {
-                            ContentUnavailableView(
-                                "No archived trips",
-                                systemImage: "archivebox",
-                                description: Text("Trips you archive will appear here.")
-                            )
+                            VStack(spacing: 16) {
+                                Image(systemName: "archivebox")
+                                    .font(.system(size: 38))
+                                    .foregroundStyle(theme.route)
+                                    .frame(width: 78, height: 78)
+                                    .background(theme.route.opacity(0.10), in: Circle())
+                                VStack(spacing: 6) {
+                                    Text("Nothing stored away")
+                                        .font(.system(.title2, design: .serif, weight: .bold))
+                                        .foregroundStyle(theme.primaryText)
+                                    Text("Trips you archive from your library will appear here.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(theme.secondaryText)
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                        }
+                    } else if isLoading && trips.isEmpty {
+                        ItineraSectionHeading(number: "LOADING", title: "Archived trips", message: nil)
+                        ForEach(0..<3, id: \.self) { i in
+                            ItineraSkeletonRow()
+                                .opacity(1 - Double(i) * 0.18)
                         }
                     }
 
@@ -54,8 +73,7 @@ struct ArchivedTripsView: View {
                                         Label("Restore", systemImage: "arrow.uturn.backward")
                                             .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(theme.accent)
+                                    .buttonStyle(ItineraPrimaryButtonStyle())
 
                                     Button(role: .destructive) {
                                         deleteTarget = trip
@@ -68,15 +86,12 @@ struct ArchivedTripsView: View {
                                 .disabled(workingIDs.contains(trip.jobId))
                             }
                         }
+                        .revealOnAppear()
                     }
                 }
                 .padding(18)
             }
 
-            if isLoading {
-                ProgressView()
-                    .controlSize(.large)
-            }
         }
         .navigationTitle("Archive")
         .navigationBarTitleDisplayMode(.inline)

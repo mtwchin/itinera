@@ -15,6 +15,7 @@ struct GenerationView: View {
     @State private var errorMessage: String?
     @State private var pollAttempt = 0
     @State private var isTerminalFailure = false
+    @State private var isIdentityRecoveryRequired = false
 
     var body: some View {
         ZStack {
@@ -22,12 +23,18 @@ struct GenerationView: View {
 
             if let itinerary {
                 ItineraryView(itinerary: itinerary)
+                    .transition(.opacity)
             } else if let errorMessage {
                 errorState(message: errorMessage)
+                    .transition(.opacity)
             } else {
                 loadingState
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.55), value: itinerary != nil)
+        .animation(.easeInOut(duration: 0.35), value: errorMessage != nil)
+        .sensoryFeedback(.success, trigger: itinerary != nil)
         .navigationTitle(itinerary == nil ? "Building your trip" : "Your itinerary")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -62,6 +69,9 @@ struct GenerationView: View {
                         jobID: jobID
                     )
                 }
+            } catch let error as APIError where error.requiresIdentityRecovery {
+                isIdentityRecoveryRequired = true
+                errorMessage = error.localizedDescription
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -81,27 +91,17 @@ struct GenerationView: View {
 
                 ItineraSurface {
                     VStack(spacing: 22) {
-                        RouteProgressIndicator()
+                        ItineraGenerationSpinner()
 
-                        VStack(spacing: 8) {
-                            Text("Finding the right rhythm")
-                                .font(.system(.title3, design: .serif, weight: .bold))
-                                .foregroundStyle(theme.primaryText)
-                            Text("This can take a few minutes. You can leave this screen—your trip will keep generating in the background and appear in Trips.")
-                                .font(.subheadline)
-                                .foregroundStyle(theme.secondaryText)
-                                .multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 8) {
-                            ItineraPill(text: "Places", systemImage: "mappin")
-                            ItineraPill(text: "Pacing", systemImage: "clock")
-                            ItineraPill(text: "Route", systemImage: "map")
-                        }
+                        Text("This can take a few minutes. You can leave this screen—your trip will keep generating in the background and appear in Trips.")
+                            .font(.subheadline)
+                            .foregroundStyle(theme.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity)
                 }
+                .revealOnAppear(delay: 0.1)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 36)
@@ -115,22 +115,22 @@ struct GenerationView: View {
 
                 ItineraBrandHeader(
                     eyebrow: "Route interrupted",
-                    title: isTerminalFailure ? "This trip couldn't be completed." : "We lost the trail for a moment.",
-                    message: isTerminalFailure
-                        ? "The saved request is no longer running. Return to Trips and start a fresh route when you're ready."
-                        : "Your request is still safe. Try reconnecting to check its progress."
+                        title: isTerminalFailure ? "This trip couldn't be completed." : "We lost the trail for a moment.",
+                    message: failureMessage
                 )
 
                 ItineraSurface {
                     VStack(spacing: 18) {
-                        Image(systemName: isTerminalFailure ? "map.fill" : "wifi.exclamationmark")
-                            .font(.system(size: 42))
-                            .foregroundStyle(theme.highlight)
+                        Image(systemName: failureSymbol)
+                            .font(.system(size: 32, weight: .semibold))
+                            .foregroundStyle(theme.danger)
+                            .frame(width: 70, height: 70)
+                            .background(theme.danger.opacity(0.10), in: Circle())
 
                         ItineraStatusBanner(message: message, kind: .error)
 
-                        Button(isTerminalFailure ? "Back to Trips" : "Try again") {
-                            if isTerminalFailure {
+                        Button(shouldReturnToTrips ? "Back to Trips" : "Try again") {
+                            if shouldReturnToTrips {
                                 dismiss()
                             } else {
                                 errorMessage = nil
@@ -139,49 +139,81 @@ struct GenerationView: View {
                         }
                         .buttonStyle(ItineraPrimaryButtonStyle())
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 36)
         }
     }
+
+    private var shouldReturnToTrips: Bool {
+        isTerminalFailure || isIdentityRecoveryRequired
+    }
+
+    private var failureSymbol: String {
+        if isIdentityRecoveryRequired {
+            return "person.crop.circle.badge.exclamationmark"
+        }
+        return isTerminalFailure ? "map.fill" : "wifi.exclamationmark"
+    }
+
+    private var failureMessage: String {
+        if isIdentityRecoveryRequired {
+            return "Your saved trip remains on this iPhone. Return to Trips while your identity is recovered."
+        }
+        if isTerminalFailure {
+            return "The saved request is no longer running. Return to Trips and start a fresh route when you're ready."
+        }
+        return "Your request is still safe. Try reconnecting to check its progress."
+    }
 }
 
-private struct RouteProgressIndicator: View {
+private struct ItineraGenerationSpinner: View {
     @Environment(\.itineraTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var isAnimating = false
+    private let phrases = [
+        "Finding the right places…",
+        "Balancing travel time…",
+        "Arranging your route…",
+        "Finalizing each stop…"
+    ]
+
+    @State private var spinAngle: Double = 0
+    @State private var phraseIndex = 0
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<4, id: \.self) { index in
-                Circle()
-                    .fill(index == 3 ? theme.highlight : theme.route)
-                    .frame(width: 16, height: 16)
-                    .scaleEffect(isAnimating && !reduceMotion ? 1 : 0.72)
-                    .opacity(isAnimating || reduceMotion ? 1 : 0.45)
-                    .animation(
-                        reduceMotion
-                            ? nil
-                            : .easeInOut(duration: 0.72)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.13),
-                        value: isAnimating
-                    )
+        VStack(spacing: 16) {
+            ItineraLogoMark(size: 72)
+                .rotationEffect(.degrees(reduceMotion ? 0 : spinAngle))
+                .shadow(color: theme.highlight.opacity(0.22), radius: 16, y: 5)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                        spinAngle = 360
+                    }
+                }
 
-                if index < 3 {
-                    Rectangle()
-                        .fill(theme.route.opacity(0.45))
-                        .frame(height: 2)
-                        .frame(maxWidth: 52)
+            Text(phrases[phraseIndex])
+                .font(.system(.subheadline, design: .serif))
+                .foregroundStyle(theme.secondaryText)
+                .id(phraseIndex)
+                .transition(.opacity)
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { break }
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    phraseIndex = (phraseIndex + 1) % phrases.count
                 }
             }
         }
-        .frame(maxWidth: 250)
-        .padding(.vertical, 10)
-        .onAppear { isAnimating = true }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Generating itinerary")
+        .accessibilityValue(phrases[phraseIndex])
+        .accessibilityHint("Itinera will announce the current generation step.")
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }

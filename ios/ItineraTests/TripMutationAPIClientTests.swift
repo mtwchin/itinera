@@ -374,7 +374,505 @@ final class TripMutationAPIClientTests: XCTestCase {
         XCTAssertEqual(appState.libraryRevision, 1)
     }
 
-    private func makeClient() -> APIClient {
+    @MainActor
+    func testClearDownloadedTripDataPurgesCompletedTripCache() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = CompletedTripCache(
+            fileURL: root.appending(path: "completed.json")
+        )
+        _ = try await cache.replace(with: [makeSavedTrip(archivedAt: nil)])
+        let appState = makeAppState(root: root, cache: cache)
+        let activity = Itinerary.preview.itinerary[0].activities[0]
+        let stopID = TripStopID(tripID: "job-123", day: 1, activity: activity)
+        try await appState.tripProgressStore.set(.completed, for: stopID)
+
+        await appState.loadCachedTrips()
+        XCTAssertEqual(appState.cachedTrips.map(\.jobId), ["job-123"])
+
+        try await appState.clearDownloadedTripData()
+
+        XCTAssertTrue(appState.cachedTrips.isEmpty)
+        let clearedSnapshot = try await cache.load()
+        XCTAssertNil(clearedSnapshot)
+        let clearedProgress = try await appState.tripProgressStore.progress(for: "job-123")
+        XCTAssertTrue(clearedProgress.isEmpty)
+    }
+
+    @MainActor
+    func testPrincipalActivationPurgesLegacyCoreStoresAndUsesScopedStores() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacyCache = CompletedTripCache(fileURL: root.appending(path: "legacy-cache.json"))
+        let legacyJobs = PendingJobStore(fileURL: root.appending(path: "legacy-jobs.json"))
+        let legacySubmissions = PendingSubmissionStore(
+            fileURL: root.appending(path: "legacy-submissions.json")
+        )
+        let legacyProgress = TripProgressStore(fileURL: root.appending(path: "legacy-progress.json"))
+        _ = try await legacyCache.replace(with: [makeSavedTrip(archivedAt: nil)])
+        _ = try await legacyJobs.add(jobID: "legacy-job", title: "Legacy")
+        _ = try await legacySubmissions.record(
+            for: makeGenerateRequest(),
+            title: "Legacy"
+        )
+        let activity = Itinerary.preview.itinerary[0].activities[0]
+        let legacyStop = TripStopID(tripID: "legacy-job", day: 1, activity: activity)
+        try await legacyProgress.set(.completed, for: legacyStop)
+
+        let userID = "11111111-2222-3333-4444-555555555555"
+        let credentialStore = TripMutationCredentialStore(userID: userID)
+        let defaultsSuite = "TripMutationAPIClientTests.\(UUID().uuidString)"
+        let localDefaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { localDefaults.removePersistentDomain(forName: defaultsSuite) }
+        localDefaults.set(
+            Data("legacy draft".utf8),
+            forKey: ItineraLocalDataKeys.tripDraft
+        )
+        localDefaults.set(
+            ["legacy-activity"],
+            forKey: ItineraLocalDataKeys.lockedStopsPrefix + "legacy-job"
+        )
+        XCTAssertTrue(TripWidgetSnapshotStore.save(
+            TripWidgetSnapshot(
+                tripID: "legacy-job",
+                tripTitle: "Legacy widget",
+                dayNumber: 1,
+                stopNumber: 1,
+                totalStops: 2,
+                currentStop: nil,
+                nextStop: "Prior private stop",
+                leaveBy: nil,
+                progress: 0
+            ),
+            defaults: localDefaults
+        ))
+        let appState = AppState(
+            apiClient: makeClient(credentialStore: credentialStore),
+            pendingJobStore: legacyJobs,
+            pendingSubmissionStore: legacySubmissions,
+            completedTripCache: legacyCache,
+            tripProgressStore: legacyProgress,
+            localDataDefaults: localDefaults,
+            widgetSnapshotDefaults: localDefaults,
+            requiresPrincipalScopedStores: true,
+            privateStoreRoot: root
+        )
+
+        try await appState.activatePrincipalScopedStores()
+        XCTAssertNil(TripWidgetSnapshotStore.load(defaults: localDefaults))
+        await appState.saveTripDraftData(Data("scoped draft".utf8))
+        await appState.saveLockedActivityIDs(["scoped-activity"], jobID: "scoped-job")
+        let scopedWidget = TripWidgetSnapshot(
+            tripID: "scoped-job",
+            tripTitle: "Scoped widget",
+            dayNumber: 1,
+            stopNumber: 1,
+            totalStops: 2,
+            currentStop: nil,
+            nextStop: "Private scoped stop",
+            leaveBy: nil,
+            progress: 0
+        )
+        let savedWidget = await appState.saveWidgetSnapshot(scopedWidget)
+        XCTAssertTrue(savedWidget)
+        await appState.registerPending(jobID: "scoped-job", title: "Scoped")
+        let scopedStop = TripStopID(tripID: "scoped-job", day: 1, activity: activity)
+        try await appState.tripProgressStore.set(.completed, for: scopedStop)
+
+        let scope = try XCTUnwrap(LocalPrincipalScope(userID: userID))
+        let scopedJobs = PendingJobStore.live(scope: scope, root: root)
+        let scopedProgress = TripProgressStore.live(scope: scope, root: root)
+        let legacySnapshot = try await legacyCache.load()
+        let legacyJobRecords = try await legacyJobs.all()
+        let legacySubmissionRecords = try await legacySubmissions.all()
+        let legacyStopStatus = try await legacyProgress.status(for: legacyStop)
+        let scopedJobRecords = try await scopedJobs.all()
+        let scopedStopStatus = try await scopedProgress.status(for: scopedStop)
+        let scopedDraft = await appState.loadTripDraftData()
+        let scopedLocks = await appState.loadLockedActivityIDs(jobID: "scoped-job")
+        let loadedWidget = TripWidgetSnapshotStore.load(defaults: localDefaults)
+        XCTAssertNil(legacySnapshot)
+        XCTAssertTrue(legacyJobRecords.isEmpty)
+        XCTAssertTrue(legacySubmissionRecords.isEmpty)
+        XCTAssertEqual(legacyStopStatus, .upcoming)
+        XCTAssertNil(localDefaults.data(forKey: ItineraLocalDataKeys.tripDraft))
+        XCTAssertNil(localDefaults.object(
+            forKey: ItineraLocalDataKeys.lockedStopsPrefix + "legacy-job"
+        ))
+        XCTAssertEqual(scopedJobRecords.map(\.jobID), ["scoped-job"])
+        XCTAssertEqual(scopedStopStatus, .completed)
+        XCTAssertEqual(scopedDraft, Data("scoped draft".utf8))
+        XCTAssertEqual(scopedLocks, ["scoped-activity"])
+        XCTAssertEqual(loadedWidget, scopedWidget)
+    }
+
+    @MainActor
+    func testAccountDeletionPurgesCompletedTripCacheAfterServerConfirmation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultsSuite = "TripMutationAPIClientTests.\(UUID().uuidString)"
+        let localDataDefaults = try XCTUnwrap(
+            UserDefaults(suiteName: defaultsSuite)
+        )
+        defer { localDataDefaults.removePersistentDomain(forName: defaultsSuite) }
+        let cache = CompletedTripCache(
+            fileURL: root.appending(path: "completed.json")
+        )
+        let pendingJobStore = PendingJobStore(
+            fileURL: root.appending(path: "pending.json")
+        )
+        let pendingSubmissionStore = PendingSubmissionStore(
+            fileURL: root.appending(path: "submissions.json")
+        )
+        let credentialStore = TripMutationCredentialStore()
+        let installationIDBeforeDeletion = await credentialStore.installationIdentifier()
+        _ = try await cache.replace(with: [makeSavedTrip(archivedAt: nil)])
+        _ = try await pendingJobStore.add(
+            jobID: "job-123",
+            title: "Queued Lisbon"
+        )
+        _ = try await pendingSubmissionStore.record(
+            for: makeGenerateRequest(),
+            title: "Queued Lisbon"
+        )
+        localDataDefaults.set(
+            Data([1, 2, 3]),
+            forKey: ItineraLocalDataKeys.tripDraft
+        )
+        let lockedStopsKey = ItineraLocalDataKeys.lockedStopsPrefix + "job-123"
+        localDataDefaults.set(["activity-1"], forKey: lockedStopsKey)
+        localDataDefaults.set("keep", forKey: "unrelated.preference")
+        XCTAssertTrue(
+            TripWidgetSnapshotStore.save(
+                TripWidgetSnapshot(
+                    tripID: "job-123",
+                    tripTitle: "Prior Lisbon",
+                    dayNumber: 1,
+                    stopNumber: 1,
+                    totalStops: 3,
+                    currentStop: nil,
+                    nextStop: "Prior private stop",
+                    leaveBy: nil,
+                    progress: 0
+                ),
+                defaults: localDataDefaults
+            )
+        )
+        let appState = makeAppState(
+            root: root,
+            cache: cache,
+            pendingJobStore: pendingJobStore,
+            pendingSubmissionStore: pendingSubmissionStore,
+            credentialStore: credentialStore,
+            localDataDefaults: localDataDefaults,
+            widgetSnapshotDefaults: localDataDefaults
+        )
+        let activity = Itinerary.preview.itinerary[0].activities[0]
+        let stopID = TripStopID(tripID: "job-123", day: 1, activity: activity)
+        try await appState.tripProgressStore.set(.completed, for: stopID)
+
+        TripMutationURLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/auth/me")
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            let body = try XCTUnwrap(request.tripMutationBodyData)
+            let payload = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: String]
+            )
+            XCTAssertEqual(payload["confirmation"], "DELETE")
+            return .init(statusCode: 204, data: Data())
+        }
+
+        try await appState.deleteMyData()
+
+        XCTAssertTrue(appState.cachedTrips.isEmpty)
+        let clearedSnapshot = try await cache.load()
+        XCTAssertNil(clearedSnapshot)
+        let clearedProgress = try await appState.tripProgressStore.progress(for: "job-123")
+        XCTAssertTrue(clearedProgress.isEmpty)
+        XCTAssertNil(
+            localDataDefaults.object(forKey: ItineraLocalDataKeys.tripDraft)
+        )
+        XCTAssertNil(localDataDefaults.object(forKey: lockedStopsKey))
+        XCTAssertNil(TripWidgetSnapshotStore.load(defaults: localDataDefaults))
+        XCTAssertEqual(localDataDefaults.string(forKey: "unrelated.preference"), "keep")
+        let remainingPendingJobs = try await pendingJobStore.all()
+        let remainingSubmissions = try await pendingSubmissionStore.all()
+        let remainingCredentials = await credentialStore.loadCredentials()
+        let installationIDAfterDeletion = await credentialStore.installationIdentifier()
+        XCTAssertTrue(remainingPendingJobs.isEmpty)
+        XCTAssertTrue(remainingSubmissions.isEmpty)
+        XCTAssertTrue(appState.pendingJobs.isEmpty)
+        XCTAssertNil(remainingCredentials)
+        XCTAssertNotEqual(installationIDAfterDeletion, installationIDBeforeDeletion)
+    }
+
+    @MainActor
+    func testAppleRecoveryPurgesPriorAccountLocalStateBeforeRefreshingLibrary() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultsSuite = "TripMutationAPIClientTests.\(UUID().uuidString)"
+        let localDataDefaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { localDataDefaults.removePersistentDomain(forName: defaultsSuite) }
+        let cache = CompletedTripCache(fileURL: root.appending(path: "completed.json"))
+        let pendingJobStore = PendingJobStore(fileURL: root.appending(path: "pending.json"))
+        let pendingSubmissionStore = PendingSubmissionStore(
+            fileURL: root.appending(path: "submissions.json")
+        )
+        let credentialStore = TripMutationCredentialStore()
+        _ = try await cache.replace(with: [makeSavedTrip(archivedAt: nil)])
+        _ = try await pendingJobStore.add(jobID: "job-123", title: "Queued Lisbon")
+        _ = try await pendingSubmissionStore.record(
+            for: makeGenerateRequest(),
+            title: "Queued Lisbon"
+        )
+        localDataDefaults.set(Data([1, 2, 3]), forKey: ItineraLocalDataKeys.tripDraft)
+        let lockedStopsKey = ItineraLocalDataKeys.lockedStopsPrefix + "job-123"
+        localDataDefaults.set(["activity-1"], forKey: lockedStopsKey)
+        localDataDefaults.set("keep", forKey: "unrelated.preference")
+        XCTAssertTrue(
+            TripWidgetSnapshotStore.save(
+                TripWidgetSnapshot(
+                    tripID: "job-123",
+                    tripTitle: "Prior Lisbon",
+                    dayNumber: 1,
+                    stopNumber: 1,
+                    totalStops: 3,
+                    currentStop: nil,
+                    nextStop: "Prior private stop",
+                    leaveBy: nil,
+                    progress: 0
+                ),
+                defaults: localDataDefaults
+            )
+        )
+        let appState = makeAppState(
+            root: root,
+            cache: cache,
+            pendingJobStore: pendingJobStore,
+            pendingSubmissionStore: pendingSubmissionStore,
+            credentialStore: credentialStore,
+            localDataDefaults: localDataDefaults,
+            widgetSnapshotDefaults: localDataDefaults
+        )
+        let activity = Itinerary.preview.itinerary[0].activities[0]
+        let stopID = TripStopID(tripID: "job-123", day: 1, activity: activity)
+        try await appState.tripProgressStore.set(.completed, for: stopID)
+
+        TripMutationURLProtocolStub.handler = { request in
+            switch request.url?.path {
+            case "/api/v1/auth/apple/link":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
+                return .init(
+                    statusCode: 409,
+                    data: Data(
+                        """
+                        {
+                          "detail": {
+                            "code": "apple_account_exists",
+                            "message": "Apple account already exists"
+                          }
+                        }
+                        """.utf8
+                    )
+                )
+            case "/api/v1/auth/apple":
+                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                return .init(
+                    statusCode: 200,
+                    data: Data(
+                        """
+                        {
+                          "user_id": "22222222-3333-4444-5555-666666666666",
+                          "access_token": "recovered-access-token",
+                          "refresh_token": "recovered-refresh-token",
+                          "token_type": "Bearer",
+                          "expires_in": 3600
+                        }
+                        """.utf8
+                    )
+                )
+            case "/api/v1/itineraries":
+                XCTAssertEqual(request.url?.query, "include_archived=true")
+                XCTAssertEqual(
+                    request.value(forHTTPHeaderField: "Authorization"),
+                    "Bearer recovered-access-token"
+                )
+                return .init(statusCode: 200, data: Data("[]".utf8))
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        try await appState.connectAppleAccount(identityToken: "apple-identity-token")
+
+        XCTAssertTrue(appState.cachedTrips.isEmpty)
+        let recoveredSnapshot = try await cache.load()
+        let clearedProgress = try await appState.tripProgressStore.progress(for: "job-123")
+        let remainingPendingJobs = try await pendingJobStore.all()
+        let remainingSubmissions = try await pendingSubmissionStore.all()
+        let recoveredCredentials = await credentialStore.loadCredentials()
+        XCTAssertTrue(recoveredSnapshot?.trips.isEmpty == true)
+        XCTAssertTrue(clearedProgress.isEmpty)
+        XCTAssertTrue(remainingPendingJobs.isEmpty)
+        XCTAssertTrue(remainingSubmissions.isEmpty)
+        XCTAssertTrue(appState.pendingJobs.isEmpty)
+        XCTAssertNil(localDataDefaults.object(forKey: ItineraLocalDataKeys.tripDraft))
+        XCTAssertNil(localDataDefaults.object(forKey: lockedStopsKey))
+        XCTAssertNil(TripWidgetSnapshotStore.load(defaults: localDataDefaults))
+        XCTAssertNil(
+            localDataDefaults.object(
+                forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+            )
+        )
+        XCTAssertEqual(localDataDefaults.string(forKey: "unrelated.preference"), "keep")
+        XCTAssertEqual(
+            recoveredCredentials?.accessToken,
+            "recovered-access-token"
+        )
+    }
+
+    func testAppleLinkDoesNotRecoverFromAnUnrelatedConflict() async throws {
+        let client = makeClient()
+        TripMutationURLProtocolStub.handler = { request in
+            switch request.url?.path {
+            case "/api/v1/auth/apple/link":
+                return .init(
+                    statusCode: 409,
+                    data: Data(
+                        """
+                        {
+                          "detail": {
+                            "code": "apple_link_unavailable",
+                            "message": "Apple linking is temporarily unavailable."
+                          }
+                        }
+                        """.utf8
+                    )
+                )
+            case "/api/v1/auth/apple":
+                XCTFail("An unrelated conflict must not switch to another library")
+                return .init(statusCode: 500, data: Data())
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        do {
+            _ = try await client.connectAppleAccount(
+                identityToken: "apple-identity-token"
+            )
+            XCTFail("Expected the original conflict")
+        } catch let error as APIError {
+            guard case .http(let statusCode, let code, let message, _) = error else {
+                return XCTFail("Expected a conflict, got \(error)")
+            }
+            XCTAssertEqual(statusCode, 409)
+            XCTAssertEqual(code, "apple_link_unavailable")
+            XCTAssertEqual(message, "Apple linking is temporarily unavailable.")
+        }
+    }
+
+    @MainActor
+    func testAppleLinkRetriesMarkedRecoveryCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultsSuite = "TripMutationAPIClientTests.\(UUID().uuidString)"
+        let localDataDefaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { localDataDefaults.removePersistentDomain(forName: defaultsSuite) }
+        let cache = CompletedTripCache(fileURL: root.appending(path: "completed.json"))
+        _ = try await cache.replace(with: [makeSavedTrip(archivedAt: nil)])
+        localDataDefaults.set(
+            true,
+            forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+        )
+        let appState = makeAppState(
+            root: root,
+            cache: cache,
+            localDataDefaults: localDataDefaults
+        )
+        TripMutationURLProtocolStub.handler = { request in
+            switch request.url?.path {
+            case "/api/v1/auth/apple/link":
+                return .init(
+                    statusCode: 200,
+                    data: Data(
+                        """
+                        {
+                          "user_id": "11111111-2222-3333-4444-555555555555",
+                          "access_token": "linked-access-token",
+                          "refresh_token": "linked-refresh-token",
+                          "token_type": "Bearer",
+                          "expires_in": 3600
+                        }
+                        """.utf8
+                    )
+                )
+            case "/api/v1/itineraries":
+                XCTAssertEqual(
+                    request.value(forHTTPHeaderField: "Authorization"),
+                    "Bearer linked-access-token"
+                )
+                return .init(statusCode: 200, data: Data("[]".utf8))
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        try await appState.connectAppleAccount(identityToken: "apple-identity-token")
+
+        let clearedSnapshot = try await cache.load()
+        XCTAssertTrue(clearedSnapshot?.trips.isEmpty == true)
+        XCTAssertNil(
+            localDataDefaults.object(
+                forKey: ItineraLocalDataKeys.pendingAppleRecoveryCleanup
+            )
+        )
+    }
+
+    @MainActor
+    func testAccountDeletionRetainsReplayCredentialsWhenLocalCleanupFails() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credentialStore = TripMutationCredentialStore()
+        let installationIDBeforeDeletion = await credentialStore.installationIdentifier()
+        let cache = CompletedTripCache(
+            fileURL: root.appending(path: "completed.json")
+        )
+        let appState = makeAppState(
+            root: root,
+            cache: cache,
+            pendingJobStore: PendingJobStore(
+                fileURL: URL(fileURLWithPath: "/dev/null/pending.json")
+            ),
+            credentialStore: credentialStore
+        )
+        TripMutationURLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/auth/me")
+            return .init(statusCode: 204, data: Data())
+        }
+
+        do {
+            try await appState.deleteMyData()
+            XCTFail("Expected local cleanup to fail")
+        } catch is LocalDataCleanupError {
+            // The server deletion has committed, but retry state remains.
+        }
+
+        let remainingCredentials = await credentialStore.loadCredentials()
+        let installationIDAfterFailure = await credentialStore.installationIdentifier()
+        XCTAssertNotNil(remainingCredentials)
+        XCTAssertEqual(installationIDAfterFailure, installationIDBeforeDeletion)
+    }
+
+    private func makeClient(
+        credentialStore: TripMutationCredentialStore = .init()
+    ) -> APIClient {
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [TripMutationURLProtocolStub.self]
         return APIClient(
@@ -384,7 +882,7 @@ final class TripMutationAPIClientTests: XCTestCase {
                 resourceTimeout: 3
             ),
             session: URLSession(configuration: sessionConfiguration),
-            credentialStore: TripMutationCredentialStore(),
+            credentialStore: credentialStore,
             now: { Date(timeIntervalSince1970: 2_000_000_000) }
         )
     }
@@ -392,20 +890,46 @@ final class TripMutationAPIClientTests: XCTestCase {
     @MainActor
     private func makeAppState(
         root: URL,
-        cache: CompletedTripCache
+        cache: CompletedTripCache,
+        pendingJobStore: PendingJobStore? = nil,
+        pendingSubmissionStore: PendingSubmissionStore? = nil,
+        credentialStore: TripMutationCredentialStore = .init(),
+        localDataDefaults: UserDefaults = .standard,
+        widgetSnapshotDefaults: UserDefaults? = nil
     ) -> AppState {
         AppState(
-            apiClient: makeClient(),
-            pendingJobStore: PendingJobStore(
+            apiClient: makeClient(credentialStore: credentialStore),
+            pendingJobStore: pendingJobStore ?? PendingJobStore(
                 fileURL: root.appending(path: "pending.json")
             ),
-            pendingSubmissionStore: PendingSubmissionStore(
+            pendingSubmissionStore: pendingSubmissionStore ?? PendingSubmissionStore(
                 fileURL: root.appending(path: "submissions.json")
             ),
             completedTripCache: cache,
             tripProgressStore: TripProgressStore(
                 fileURL: root.appending(path: "progress.json")
-            )
+            ),
+            localDataDefaults: localDataDefaults,
+            widgetSnapshotDefaults: widgetSnapshotDefaults
+        )
+    }
+
+    private func makeGenerateRequest() -> GenerateItineraryRequest {
+        GenerateItineraryRequest(
+            city: "Lisbon",
+            country: "Portugal",
+            accommodation: Accommodation(
+                address: "Rua Augusta",
+                lat: 38.7,
+                lng: -9.1
+            ),
+            arrivalDate: "2026-08-01",
+            departureDate: "2026-08-03",
+            groupSize: 2,
+            wakeUpTime: "08:00",
+            foodPreferences: nil,
+            mustDo: nil,
+            budget: "Medium"
         )
     }
 
@@ -435,19 +959,30 @@ final class TripMutationAPIClientTests: XCTestCase {
 }
 
 private actor TripMutationCredentialStore: CredentialStoring {
-    private var credentials = AuthCredentials(
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-        tokenType: "Bearer",
-        expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
-    )
+    private var credentials: AuthCredentials?
+
+    init(userID: String? = nil) {
+        credentials = AuthCredentials(
+            accessToken: "access-token",
+            refreshToken: "refresh-token",
+            tokenType: "Bearer",
+            expiresAt: Date(timeIntervalSince1970: 4_000_000_000),
+            userID: userID
+        )
+    }
 
     func loadCredentials() -> AuthCredentials? { credentials }
     func saveCredentials(_ credentials: AuthCredentials) {
         self.credentials = credentials
     }
-    func clearCredentials() {}
-    func installationIdentifier() -> String { "installation-id" }
+    private var installationID = "installation-id"
+
+    func clearCredentials() { credentials = nil }
+    func clearAccountState() {
+        credentials = nil
+        installationID = UUID().uuidString.lowercased()
+    }
+    func installationIdentifier() -> String { installationID }
 }
 
 private final class TripMutationURLProtocolStub: URLProtocol {

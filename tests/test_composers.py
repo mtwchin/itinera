@@ -13,9 +13,11 @@ from openai import OpenAIError
 from backend.agents.composers import (
     AnthropicComposer,
     ComposerError,
+    GroqComposer,
     OllamaComposer,
     OpenAIComposer,
     create_itinerary_composer,
+    reported_composer_usage,
     validate_composer_configuration,
 )
 from backend.config import Settings
@@ -86,14 +88,14 @@ def _settings(**overrides) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def test_ollama_is_the_default_composer():
+def test_openai_is_the_default_production_composer():
     settings = Settings(_env_file=None)
 
-    assert settings.itinerary_composer_provider == "ollama"
+    assert settings.itinerary_composer_provider == "openai"
     assert settings.ollama_model == "qwen2.5:7b-instruct"
     assert settings.openai_model == "gpt-5.6-luna"
-    assert settings.openai_request_timeout_seconds == 180
-    assert isinstance(create_itinerary_composer(settings), OllamaComposer)
+    assert settings.openai_request_timeout_seconds == 90
+    assert settings.itinerary_composer_max_attempts == 2
 
 
 def test_ollama_composer_requests_schema_constrained_non_streaming_json():
@@ -119,6 +121,35 @@ def test_ollama_composer_requests_schema_constrained_non_streaming_json():
     assert payload["options"]["temperature"] == 0
     assert "Lisbon" in payload["messages"][1]["content"]
     assert "Time Out Market" in payload["messages"][1]["content"]
+
+
+def test_ollama_provider_usage_is_sanitized_for_the_attempt_ledger():
+    response = MagicMock()
+    response.json.return_value = {
+        "message": {"content": ITINERARY},
+        "prompt_eval_count": 123,
+        "eval_count": 456,
+    }
+    composer = OllamaComposer("http://localhost:11434/api", "test-model")
+
+    with patch("backend.agents.composers.requests.post", return_value=response):
+        composer.compose(REQUEST, PLACES)
+
+    assert reported_composer_usage(composer) == {
+        "input_tokens": 123,
+        "output_tokens": 456,
+    }
+
+
+def test_usage_ledger_rejects_non_numeric_provider_values():
+    composer = MagicMock()
+    composer.reported_usage = {
+        "input_tokens": True,
+        "output_tokens": -1,
+        "unexpected": "not persisted",
+    }
+
+    assert reported_composer_usage(composer) is None
 
 
 def test_ollama_configured_api_key_is_sent_as_bearer_authorization():
@@ -252,7 +283,7 @@ def test_anthropic_remains_an_optional_composer():
         )
 
     assert isinstance(composer, AnthropicComposer)
-    client.assert_called_once_with(api_key="test-key")
+    client.assert_called_once_with(api_key="test-key", timeout=90, max_retries=0)
 
 
 def test_anthropic_selection_requires_a_key():
@@ -271,7 +302,9 @@ def test_openai_composer_uses_responses_structured_parse_without_storage():
         composer = OpenAIComposer("openai-test-key", "gpt-5.6-luna", 45)
         result = composer.compose(REQUEST, PLACES)
 
-    sdk.assert_called_once_with(api_key="openai-test-key", timeout=45)
+    sdk.assert_called_once_with(
+        api_key="openai-test-key", timeout=45, max_retries=0
+    )
     assert result.itinerary[0].activities[0].name == "Time Out Market"
     call = client.responses.parse.call_args.kwargs
     assert call["model"] == "gpt-5.6-luna"
@@ -309,7 +342,9 @@ def test_openai_factory_uses_configured_key_model_and_timeout():
         )
 
     assert isinstance(composer, OpenAIComposer)
-    sdk.assert_called_once_with(api_key="project-secret", timeout=73)
+    sdk.assert_called_once_with(
+        api_key="project-secret", timeout=73, max_retries=0
+    )
     assert composer.model == "gpt-5.6-luna"
 
 
@@ -318,6 +353,18 @@ def test_openai_selection_requires_key_and_nonblank_model():
         validate_composer_configuration(
             _settings(itinerary_composer_provider="openai", openai_api_key=None)
         )
+
+
+def test_groq_disables_implicit_sdk_retries():
+    with patch("backend.agents.composers.OpenAI") as sdk:
+        GroqComposer("test-key", "test-model", timeout_seconds=45)
+
+    sdk.assert_called_once_with(
+        api_key="test-key",
+        base_url="https://api.groq.com/openai/v1",
+        timeout=45,
+        max_retries=0,
+    )
 
     with pytest.raises(RuntimeError, match="OPENAI_MODEL must not be empty"):
         validate_composer_configuration(

@@ -22,7 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from backend.config import get_settings
+from backend.generation_policy import (
+    CURRENT_GENERATION_POLICY_VERSION,
+    LEGACY_GENERATION_POLICY_VERSION,
+)
 from backend.db.models import (
+    AIConsentEvent,
+    AgentRun,
     ChecklistItem,
     CollaborationInvite,
     GuestRefreshToken,
@@ -60,6 +66,7 @@ class JobClaim:
     run_token: str | None = None
     result: dict | None = None
     error: str | None = None
+    generation_policy_version: int = CURRENT_GENERATION_POLICY_VERSION
 
 
 @dataclass(frozen=True)
@@ -183,6 +190,7 @@ async def create_or_replay_job(
         status=JobStatus.pending,
         request=request,
         request_hash=request_hash,
+        generation_policy_version=CURRENT_GENERATION_POLICY_VERSION,
         idempotency_key=idempotency_key,
     )
     event = OutboxEvent(
@@ -716,6 +724,12 @@ async def delete_user_data(session: AsyncSession, *, user: User) -> None:
         .order_by(GuestRefreshToken.created_at, GuestRefreshToken.id)
         .with_for_update(of=GuestRefreshToken)
     )
+    await session.execute(
+        select(AIConsentEvent.id)
+        .where(AIConsentEvent.user_id == user.id)
+        .order_by(AIConsentEvent.recorded_at, AIConsentEvent.id)
+        .with_for_update(of=AIConsentEvent)
+    )
 
     await session.execute(
         delete(User)
@@ -976,6 +990,10 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     version=row.version or 1,
                     result=row.result,
                     error=row.error,
+                    generation_policy_version=(
+                        row.generation_policy_version
+                        or LEGACY_GENERATION_POLICY_VERSION
+                    ),
                 )
 
             now = _utcnow()
@@ -990,6 +1008,10 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                     status=row.status,
                     request=row.request,
                     version=row.version or 1,
+                    generation_policy_version=(
+                        row.generation_policy_version
+                        or LEGACY_GENERATION_POLICY_VERSION
+                    ),
                 )
 
             run_token = uuid.uuid4().hex
@@ -1006,6 +1028,9 @@ async def _claim_job(job_id: str) -> JobClaim | None:
                 request=row.request,
                 version=row.version or 1,
                 run_token=run_token,
+                generation_policy_version=(
+                    row.generation_policy_version or LEGACY_GENERATION_POLICY_VERSION
+                ),
             )
     finally:
         await engine.dispose()
@@ -1048,6 +1073,8 @@ async def _finish_job(
     status: JobStatus,
     result: dict | None,
     error: str | None,
+    failure_code: str | None,
+    agent_runs: list[dict] | None,
 ) -> bool:
     if status not in (JobStatus.succeeded, JobStatus.failed):
         raise ValueError("finish status must be terminal")
@@ -1065,12 +1092,43 @@ async def _finish_job(
                     status=status,
                     result=result,
                     error=error,
+                    failure_code=failure_code,
                     run_token=None,
                     lease_expires_at=None,
                     updated_at=_utcnow(),
                 )
+                .returning(Itinerary.id)
             )
-            return updated.rowcount == 1
+            itinerary_id = updated.scalar_one_or_none()
+            if itinerary_id is None:
+                return False
+            for run in agent_runs or []:
+                agent = run.get("agent")
+                step_index = run.get("step_index")
+                tool_calls = run.get("tool_calls")
+                latency_ms = run.get("latency_ms")
+                if (
+                    not isinstance(agent, str)
+                    or not agent
+                    or not isinstance(step_index, int)
+                    or step_index < 1
+                    or not isinstance(tool_calls, list)
+                    or not isinstance(latency_ms, int)
+                    or latency_ms < 0
+                ):
+                    raise ValueError("invalid privacy-safe agent run record")
+                session.add(
+                    AgentRun(
+                        itinerary_id=itinerary_id,
+                        agent=agent[:64],
+                        step_index=step_index,
+                        tool_calls=tool_calls,
+                        input=None,
+                        output=None,
+                        latency_ms=latency_ms,
+                    )
+                )
+            return True
     finally:
         await engine.dispose()
 
@@ -1082,6 +1140,8 @@ def finish_job_sync(
     status: JobStatus,
     result: dict | None = None,
     error: str | None = None,
+    failure_code: str | None = None,
+    agent_runs: list[dict] | None = None,
 ) -> bool:
     return asyncio.run(
         _finish_job(
@@ -1094,5 +1154,7 @@ def finish_job_sync(
                 force_reissue=True,
             ),
             error=error,
+            failure_code=failure_code,
+            agent_runs=agent_runs,
         )
     )

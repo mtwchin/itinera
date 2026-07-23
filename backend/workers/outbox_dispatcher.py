@@ -33,6 +33,40 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _eligible_outbox_events_statement(*, now: datetime, batch_size: int):
+    """Select work that has not been published or whose worker lease expired.
+
+    A broker backlog leaves a job ``pending`` after its first successful
+    publication. Re-enqueueing that row on a timer creates avoidable duplicate
+    deliveries, so it is intentionally excluded until a worker has claimed it
+    and then lost its execution lease.
+    """
+
+    return (
+        select(OutboxEvent)
+        .join(Itinerary, Itinerary.job_id == OutboxEvent.aggregate_id)
+        .where(
+            OutboxEvent.available_at <= now,
+            or_(
+                and_(
+                    OutboxEvent.dispatched_at.is_(None),
+                    Itinerary.status == JobStatus.pending,
+                ),
+                and_(
+                    Itinerary.status == JobStatus.running,
+                    or_(
+                        Itinerary.lease_expires_at.is_(None),
+                        Itinerary.lease_expires_at <= now,
+                    ),
+                ),
+            ),
+        )
+        .order_by(OutboxEvent.created_at)
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+
+
 async def dispatch_outbox_batch(
     session: AsyncSession,
     *,
@@ -47,27 +81,7 @@ async def dispatch_outbox_batch(
     rows = list(
         (
             await session.execute(
-                select(OutboxEvent)
-                .join(Itinerary, Itinerary.job_id == OutboxEvent.aggregate_id)
-                .where(
-                    OutboxEvent.available_at <= now,
-                    or_(
-                        OutboxEvent.dispatched_at.is_(None),
-                        or_(
-                            Itinerary.status == JobStatus.pending,
-                            and_(
-                                Itinerary.status == JobStatus.running,
-                                or_(
-                                    Itinerary.lease_expires_at.is_(None),
-                                    Itinerary.lease_expires_at <= now,
-                                ),
-                            ),
-                        ),
-                    ),
-                )
-                .order_by(OutboxEvent.created_at)
-                .limit(batch_size)
-                .with_for_update(skip_locked=True)
+                _eligible_outbox_events_statement(now=now, batch_size=batch_size)
             )
         ).scalars()
     )

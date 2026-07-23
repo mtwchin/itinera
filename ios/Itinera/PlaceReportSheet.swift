@@ -13,6 +13,7 @@ struct PlaceReportSheet: View {
     @State private var details = ""
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @State private var submitted = false
 
     var body: some View {
         Form {
@@ -44,13 +45,20 @@ struct PlaceReportSheet: View {
         .scrollContentBackground(.hidden)
         .background(ItineraBackground())
         .navigationTitle("Report place")
+        .sensoryFeedback(.success, trigger: submitted)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Submit") {
+                Button {
                     Task { await submit() }
+                } label: {
+                    if isSubmitting {
+                        ProgressView().tint(theme.route)
+                    } else {
+                        Text("Submit")
+                    }
                 }
                 .disabled(isSubmitting)
             }
@@ -59,6 +67,7 @@ struct PlaceReportSheet: View {
 
     private func submit() async {
         isSubmitting = true
+        errorMessage = nil
         defer { isSubmitting = false }
         do {
             _ = try await appState.apiClient.createPlaceReport(
@@ -72,6 +81,7 @@ struct PlaceReportSheet: View {
                 )
             )
             onSubmitted()
+            submitted = true
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

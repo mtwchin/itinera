@@ -15,6 +15,7 @@ struct TripEditorView: View {
     @State private var history: [ItineraryRevisionResponse] = []
     @State private var undoStack: [(day: Int, snapshot: ItineraryDay)] = []
     @State private var lockedActivityIDs: Set<String>
+    @State private var didEditLocks = false
     @State private var editorTarget: ActivityEditorTarget?
     @State private var isWorking = false
     @State private var errorMessage: String?
@@ -44,10 +45,7 @@ struct TripEditorView: View {
                 ?? itinerary.itinerary.first?.day
                 ?? 1
         )
-        let stored = UserDefaults.standard.stringArray(
-            forKey: Self.lockKey(jobID)
-        ) ?? []
-        _lockedActivityIDs = State(initialValue: Set(stored))
+        _lockedActivityIDs = State(initialValue: [])
     }
 
     private var dayIndex: Int? {
@@ -94,8 +92,10 @@ struct TripEditorView: View {
                     .tint(theme.route)
                     .padding(26)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: isWorking)
         .navigationTitle("Edit itinerary")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -111,7 +111,13 @@ struct TripEditorView: View {
                 .disabled(undoStack.isEmpty || isWorking)
             }
         }
-        .task { await loadHistory() }
+        .task {
+            let storedLocks = await appState.loadLockedActivityIDs(jobID: jobID)
+            if !didEditLocks {
+                lockedActivityIDs = storedLocks
+            }
+            await loadHistory()
+        }
         .sheet(item: $editorTarget) { target in
             NavigationStack {
                 ActivityEditorForm(target: target) { activity in
@@ -124,14 +130,40 @@ struct TripEditorView: View {
 
     private var dayPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 9) {
+            HStack(spacing: 10) {
                 ForEach(itinerary.itinerary) { day in
-                    Button("Day \(day.day)") { selectedDay = day.day }
-                        .buttonStyle(.borderedProminent)
-                        .tint(selectedDay == day.day ? theme.accent : theme.secondaryText.opacity(0.35))
+                    Button {
+                        withAnimation(.snappy) { selectedDay = day.day }
+                    } label: {
+                        Text("Day \(day.day)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(
+                                selectedDay == day.day
+                                    ? theme.accentContrast
+                                    : theme.primaryText
+                            )
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 44)
+                            .background(
+                                selectedDay == day.day ? theme.accent : theme.surface,
+                                in: Capsule()
+                            )
+                            .overlay {
+                                if selectedDay != day.day {
+                                    Capsule().stroke(theme.border, lineWidth: 1)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selectedDay == day.day ? .isSelected : [])
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
                 }
             }
         }
+        .sensoryFeedback(.selection, trigger: selectedDay)
     }
 
     private func refinementCard(_ day: ItineraryDay) -> some View {
@@ -177,7 +209,7 @@ struct TripEditorView: View {
 
                 if let weatherAdvisory {
                     ItineraStatusBanner(
-                        message: "\(weatherAdvisory.summary), \(weatherAdvisory.temperature) · \(Int((weatherAdvisory.precipitationChance * 100).rounded()))% precipitation",
+                        message: "\(weatherAdvisory.summary) · \(weatherAdvisory.temperature) · \(Int((weatherAdvisory.precipitationChance * 100).rounded()))% rain",
                         kind: weatherAdvisory.recommendsIndoorPlan ? .warning : .success
                     )
                     if weatherAdvisory.recommendsIndoorPlan {
@@ -186,8 +218,7 @@ struct TripEditorView: View {
                         } label: {
                             Label("Move indoor stops earlier", systemImage: "cloud.rain")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(theme.accent)
+                        .buttonStyle(ItineraPrimaryButtonStyle())
                     }
                 }
             }
@@ -215,9 +246,14 @@ struct TripEditorView: View {
                             Text(activity.name)
                                 .font(.headline)
                                 .foregroundStyle(theme.primaryText)
-                            Text("\(activity.time) · \(activity.duration)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(theme.secondaryText)
+                            Label {
+                                Text("\(activity.time) · \(activity.duration)")
+                                    .monospacedDigit()
+                            } icon: {
+                                Image(systemName: "clock")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText)
                             Text(activity.address)
                                 .font(.caption)
                                 .foregroundStyle(theme.secondaryText)
@@ -227,13 +263,17 @@ struct TripEditorView: View {
                         Spacer(minLength: 0)
 
                         Button {
-                            toggleLock(activity)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                toggleLock(activity)
+                            }
                         } label: {
                             Image(systemName: lockedActivityIDs.contains(activity.id) ? "lock.fill" : "lock.open")
+                                .scaleEffect(lockedActivityIDs.contains(activity.id) ? 1.15 : 1)
                                 .frame(width: 44, height: 44)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(lockedActivityIDs.contains(activity.id) ? theme.highlightStrong : theme.secondaryText)
+                        .sensoryFeedback(.selection, trigger: lockedActivityIDs.contains(activity.id))
                         .accessibilityLabel(lockedActivityIDs.contains(activity.id) ? "Unlock \(activity.name)" : "Lock \(activity.name)")
 
                         Menu {
@@ -268,6 +308,7 @@ struct TripEditorView: View {
                         }
                     }
                 }
+                .revealOnAppear()
             }
 
             Button {
@@ -285,22 +326,86 @@ struct TripEditorView: View {
                 ItineraSectionHeading(
                     number: "HISTORY",
                     title: "Revision trail",
-                    message: "Every accepted change remains auditable."
+                    message: "Every accepted change is auditable."
                 )
-                ForEach(history.reversed()) { revision in
-                    HStack {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .foregroundStyle(theme.route)
-                        Text("Version \(revision.fromVersion) → \(revision.toVersion)")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text("\(revision.operations.count) changes")
-                            .font(.caption)
-                            .foregroundStyle(theme.secondaryText)
+                VStack(spacing: 0) {
+                    ForEach(Array(history.reversed().enumerated()), id: \.element.id) { idx, revision in
+                        VStack(alignment: .leading, spacing: 0) {
+                            if idx > 0 {
+                                Divider().padding(.vertical, 8)
+                            }
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: idx == 0 ? "checkmark.seal.fill" : "clock.arrow.circlepath")
+                                    .foregroundStyle(idx == 0 ? theme.success : theme.route)
+                                    .frame(width: 28, height: 28)
+                                    .background(
+                                        (idx == 0 ? theme.success : theme.route).opacity(0.10),
+                                        in: Circle()
+                                    )
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        Text("v\(revision.toVersion)")
+                                            .font(.subheadline.weight(.bold))
+                                            .foregroundStyle(theme.primaryText)
+                                        if idx == 0 {
+                                            Text("CURRENT")
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(theme.success)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 2)
+                                                .background(theme.success.opacity(0.12), in: Capsule())
+                                        }
+                                    }
+                                    Text(revisionSummary(revision.operations))
+                                        .font(.caption)
+                                        .foregroundStyle(theme.secondaryText)
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Text(formatRevisionDate(revision.createdAt))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(theme.secondaryText)
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    private func revisionSummary(_ operations: [[String: JSONValue]]) -> String {
+        var counts: [String: Int] = [:]
+        for op in operations {
+            if case .string(let type) = op["type"] {
+                counts[type, default: 0] += 1
+            }
+        }
+        let parts: [String] = counts.sorted { $0.value > $1.value }.compactMap { type, count in
+            switch type {
+            case "add_activity":    return count == 1 ? "Added 1 stop" : "Added \(count) stops"
+            case "remove_activity": return count == 1 ? "Removed 1 stop" : "Removed \(count) stops"
+            case "reorder_activity": return "Reordered stops"
+            case "replace_activity": return count == 1 ? "Replaced 1 stop" : "Replaced \(count) stops"
+            case "regenerate_day":  return "Regenerated day"
+            default: return nil
+            }
+        }
+        return parts.isEmpty
+            ? "\(operations.count) \(operations.count == 1 ? "change" : "changes")"
+            : parts.joined(separator: " · ")
+    }
+
+    private func formatRevisionDate(_ createdAt: String) -> String {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = iso.date(from: createdAt) ?? ISO8601DateFormatter().date(from: createdAt)
+        guard let date else { return "" }
+        let fmt = DateFormatter()
+        fmt.timeStyle = .short
+        fmt.dateStyle = .none
+        return fmt.string(from: date)
     }
 
     private func apply(
@@ -438,15 +543,14 @@ struct TripEditorView: View {
     }
 
     private func toggleLock(_ activity: Activity) {
+        didEditLocks = true
         if lockedActivityIDs.contains(activity.id) {
             lockedActivityIDs.remove(activity.id)
         } else {
             lockedActivityIDs.insert(activity.id)
         }
-        UserDefaults.standard.set(
-            Array(lockedActivityIDs),
-            forKey: Self.lockKey(jobID)
-        )
+        let ids = lockedActivityIDs
+        Task { await appState.saveLockedActivityIDs(ids, jobID: jobID) }
     }
 
     private func loadHistory() async {
@@ -457,9 +561,6 @@ struct TripEditorView: View {
         }
     }
 
-    private static func lockKey(_ jobID: String) -> String {
-        ItineraLocalDataKeys.lockedStopsPrefix + jobID
-    }
 }
 
 private enum ActivityEditorTarget: Identifiable {
@@ -521,36 +622,110 @@ private struct ActivityEditorForm: View {
     }
 
     var body: some View {
-        Form {
-            Section("Place") {
-                TextField("Stop name", text: $name)
-                Button {
-                    isChoosingLocation = true
-                } label: {
-                    Label(
-                        selectedLocation?.homeBaseInputLabel ?? "Find place on map",
-                        systemImage: "map"
-                    )
+        ZStack {
+            ItineraBackground()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "01", title: "Place", message: nil)
+
+                            TextField("Stop name", text: $name)
+                                .itineraField()
+                                .accessibilityLabel("Stop name")
+
+                            Button {
+                                isChoosingLocation = true
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "map")
+                                        .foregroundStyle(theme.accent)
+                                    Text(selectedLocation?.homeBaseInputLabel ?? "Find place on map")
+                                        .foregroundStyle(selectedLocation == nil ? theme.secondaryText : theme.primaryText)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(theme.secondaryText)
+                                }
+                                .contentShape(Rectangle())
+                                .frame(minHeight: 50)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(selectedLocation == nil ? "Find place on map" : "Location: \(selectedLocation!.homeBaseInputLabel)")
+                        }
+                    }
+
+                    ItineraSurface {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ItineraSectionHeading(number: "02", title: "Schedule", message: nil)
+
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Time")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(theme.secondaryText)
+                                    TextField("09:00", text: $time)
+                                        .keyboardType(.numbersAndPunctuation)
+                                        .itineraField()
+                                }
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Duration")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(theme.secondaryText)
+                                    TextField("1 hr", text: $duration)
+                                        .itineraField()
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 9) {
+                                Text("Stop type")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(theme.secondaryText)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(Self.activityTypes, id: \.0) { typeValue, typeLabel in
+                                            Button {
+                                                withAnimation(.snappy) { type = typeValue }
+                                            } label: {
+                                                Text(typeLabel)
+                                                    .font(.subheadline.weight(type == typeValue ? .semibold : .regular))
+                                                    .foregroundStyle(type == typeValue ? .white : theme.primaryText)
+                                                    .padding(.horizontal, 14)
+                                                    .padding(.vertical, 8)
+                                                    .background(
+                                                        type == typeValue ? theme.accent : theme.accent.opacity(0.09),
+                                                        in: Capsule()
+                                                    )
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel("Type: \(typeLabel)")
+                                            .accessibilityAddTraits(type == typeValue ? .isSelected : [])
+                                        }
+                                    }
+                                    .padding(.horizontal, 1)
+                                }
+                                .sensoryFeedback(.selection, trigger: type)
+                            }
+
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("Why this stop?")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(theme.secondaryText)
+                                TextField("A description of this stop", text: $description, axis: .vertical)
+                                    .lineLimit(3...6)
+                                    .itineraField()
+                            }
+                        }
+                    }
                 }
+                .padding(18)
+                .padding(.bottom, 24)
             }
-            Section("Schedule") {
-                TextField("Time (09:00)", text: $time)
-                    .keyboardType(.numbersAndPunctuation)
-                TextField("Duration", text: $duration)
-                Picker("Type", selection: $type) {
-                    Text("Culture").tag("culture")
-                    Text("Food").tag("food")
-                    Text("Nature").tag("nature")
-                    Text("Shopping").tag("shopping")
-                    Text("Other").tag("other")
-                }
-                TextField("Why this stop?", text: $description, axis: .vertical)
-                    .lineLimit(3...6)
-            }
+            .scrollDismissesKeyboard(.interactively)
         }
-        .scrollContentBackground(.hidden)
-        .background(ItineraBackground())
         .navigationTitle(target.activity == nil ? "Add stop" : "Edit stop")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
@@ -600,6 +775,14 @@ private struct ActivityEditorForm: View {
             }
         }
     }
+
+    private static let activityTypes: [(String, String)] = [
+        ("culture", "Culture"),
+        ("food", "Food"),
+        ("nature", "Nature"),
+        ("shopping", "Shopping"),
+        ("other", "Other")
+    ]
 
     private var isValid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

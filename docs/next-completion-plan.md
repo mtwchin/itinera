@@ -22,11 +22,12 @@ The working tree now includes the next core-loop increment:
 - backend lint, OpenAPI drift, configuration parsing, and 74 tests pass.
 
 This closes the stale-coordinate/map-selection portion of NXT-006 and the
-simulator-build portion of NXT-001. It does not close either ticket: physical
-device/CI evidence, semantic grounding validation, a seven-day beta decision,
-and deterministic UI tests are still outstanding. Local Ollama also is not the
-scale target; production inference capacity, quality, retries, observability,
-and cost ceilings remain release-gated work.
+simulator-build portion of NXT-001. P4 has now made the seven-night beta
+decision enforceable for new jobs while preserving pre-rollout queued jobs.
+Physical-device/CI evidence, semantic grounding validation, and deterministic
+UI tests are still outstanding. Local Ollama also is not the scale target;
+production inference capacity, quality, retries, observability, and cost
+ceilings remain release-gated work.
 
 ## Executive decision
 
@@ -46,13 +47,13 @@ and real-infrastructure tests are complete.
 
 | Area | What was verified | Current status |
 |---|---|---|
-| Backend | Ruff, OpenAPI drift check, and 57 tests pass locally | Green, but tests are mostly mock-based |
+| Backend | Ruff and 280 tests pass locally (20 real-infrastructure tests are skipped without services) | Green for the local suite; staging/fault evidence remains required |
 | Backend coverage | 74% overall; database repository 44%; production trend and maps paths 50% and 66% | Critical infrastructure paths need integration coverage |
 | iOS static checks | All app/test Swift files parse; the core client passes strict-concurrency type checking | Green |
-| Native build | The machine has only `/Library/Developer/CommandLineTools`; `xcodebuild` cannot run | Unverified blocker |
+| Native build | Xcode 26.6 generates the project; full iOS simulator tests and an injected-HTTPS Release build pass on iOS 26.5 | Green locally; physical-device and observed CI evidence remain required |
 | CI | Workflow includes Debug, Release, and XCTest simulator jobs | Branch has no upstream and no observed CI result for this revision |
-| Distribution | No asset catalog/AppIcon, signing configuration, device archive, export, or TestFlight path | Not started |
-| Product | Create, list, status, stream, and render exist | Routing, refinement, sharing, account/data deletion, and offline completed trips are absent |
+| Distribution | App icon and Release URL validation are present | Signing, archive/export, TestFlight, and App Store delivery remain open |
+| Product | Create, saved trips, offline cache, refinement, sharing, deletion, and recovery flows exist | External-beta reliability, support, and real-infrastructure release gates remain open |
 | Production | Render topology exists; no staging smoke, load test, restore drill, alert set, or provider canary is recorded | Unproven |
 
 ## Important contract contradictions
@@ -161,6 +162,8 @@ can leave a global limiter key without an expiry.
 **Acceptance criteria**
 
 - Invalid production provider/model/secret configuration prevents promotion.
+- The generation worker validates its selected provider SDK/configuration
+  before consuming broker work; the outbox dispatcher remains credential-free.
 - An isolated deterministic smoke configuration traverses API, outbox, broker,
   worker, and database and reaches a terminal state; guards prove synthetic
   providers cannot be enabled in production.
@@ -184,6 +187,10 @@ Add `Assets.xcassets`, a complete AppIcon, launch branding, non-secret
 automation, archive/export configuration, and dSYM retention. Pin the CI Xcode
 version and verify the XcodeGen download checksum.
 
+**July 16 update:** P5 verifies the pinned XcodeGen 2.45.4 archive SHA-256 in
+CI before extraction. Archive/export, signing, and App Store delivery remain
+open; see [ci-tool-integrity.md](sprints/ci-tool-integrity.md).
+
 **Acceptance criteria**
 
 - A Release device archive built with Xcode 26 passes App Store validation.
@@ -198,6 +205,19 @@ version and verify the XcodeGen download checksum.
 **Owner:** product/iOS/backend/legal
 
 **Gate:** B
+
+**July 16 update:** P9 adds a server-authoritative, versioned grant/withdrawal
+audit and fail-closed enforcement before initial generation or AI edits. The
+iOS disclosure now saves that record before enabling submission. Provider-
+specific legal disclosure, public policy/support URLs, PrivacyInfo validation,
+and App Store privacy answers remain open; see
+[server-authoritative-ai-consent.md](sprints/server-authoritative-ai-consent.md).
+P12 makes AI edits use that same explicitly selected provider rather than a
+credential-order fallback; see
+[explicit-ai-edit-provider.md](sprints/explicit-ai-edit-provider.md).
+The checked-in privacy manifest is syntactically valid and bundled, but Settings
+has no configured public policy/support destinations; see
+[privacy-release-artifacts.md](sprints/privacy-release-artifacts.md).
 
 The current prompt sends accommodation address and coordinates, dates, group
 size, food preferences, and free-form requests to Anthropic. Before the first
@@ -245,6 +265,10 @@ users, failures, logs, and cost records.
 
 **Gate:** B
 
+**July 16 update:** P4 enforces a seven-night cap for newly accepted jobs and
+the date picker, while preserving the old 30-night contract only for jobs
+already queued before rollout. See [beta-trip-cap.md](sprints/beta-trip-cap.md).
+
 Invalidate accommodation selection whenever its query, city, or country
 changes; make MapKit search cancellable; and require explicit result selection.
 Cap the initial beta at seven days or redesign the day selector and generation
@@ -275,6 +299,20 @@ aborting on the first miss.
 
 **Gate:** C
 
+**July 16 update:** P3 implemented stable public terminal failure codes and
+removed raw exception text from persisted/API/SSE paths. P10 adds a 105-second
+soft / 120-second hard worker deadline, a 150-second lease with a checked
+terminal-persistence margin, and outbox eligibility that does not republish a
+successfully dispatched pending job merely because the broker is backlogged.
+Redis broker visibility is configured to 180 seconds and production rejects a
+visibility window shorter than the job lease.
+The additive failure migration backfills legacy failed rows to
+`generation_failed` and clears their old error text. Retry budgets,
+dead-lettering, provider idempotency, checkpoints, the duplicate-cost SLO, and
+real-infrastructure fault proof remain open. See
+[safe-generation-failures.md](sprints/safe-generation-failures.md) and
+[bounded-job-recovery.md](sprints/bounded-job-recovery.md).
+
 Classify provider errors as transient or permanent; honor `Retry-After`; add
 jittered retry budgets, stage/task deadlines, an attempt cap, and dead-letter
 handling.
@@ -302,6 +340,151 @@ SLO instead of claiming an impossible guarantee.
 **Owner:** backend/product/security
 
 **Gate:** C
+
+**July 16 update:** P7 now persists a privacy-safe row for every composer
+attempt, including retries, with provider/model/prompt version and latency.
+P8 adds provider-reported input/output token counts when available and marks
+unknown usage explicitly; see
+[composer-attempt-ledger.md](sprints/composer-attempt-ledger.md) and
+[provider-usage-ledger.md](sprints/provider-usage-ledger.md). Cost estimation
+and spend admission are deliberately still open. The terminal ledger path is
+now covered by the opt-in PostgreSQL/Redis integration lane.
+
+**Reliability boundary:** the current OpenAI Responses API schema documents
+usage fields but not a request idempotency key for this endpoint. The crash
+window between a paid call and terminal persistence remains open; do not claim
+exactly-once billing or send an unsupported deduplication header.
+
+**July 16 update:** P12 caps each AI-edit response at 8,000 output tokens and
+disables automatic retries for OpenAI, Groq, and Anthropic edits. This is a
+per-request exposure bound, not a rate-card-backed dollar ceiling; see
+[explicit-ai-edit-provider.md](sprints/explicit-ai-edit-provider.md).
+P13 records privacy-safe provider/usage/latency metadata for every post-call
+AI-edit outcome; see [ai-edit-attempt-ledger.md](sprints/ai-edit-attempt-ledger.md).
+
+The product/finance decisions required before P21 spend admission are explicit
+in [spend-admission-decision-record.md](sprints/spend-admission-decision-record.md);
+do not infer provider prices or dollar ceilings from source code or public pages.
+
+**July 16 update:** P22 makes Prometheus exposure opt-in and leaves it disabled
+on the public production API until an authenticated/internal collector path is
+approved; see [metrics-exposure.md](sprints/metrics-exposure.md).
+
+**July 16 update:** P23 defaults API responses to no-store, no-referrer,
+nosniff, and anti-framing headers without overriding a route-specific value;
+see [api-security-headers.md](sprints/api-security-headers.md).
+
+**July 16 update:** P24 adds a deterministic XCUITest target that launches the
+network-independent itinerary fixture. It is the foundation for, but does not
+complete, the required lifecycle UI scenarios; see
+[deterministic-ui-test.md](sprints/deterministic-ui-test.md).
+
+**July 16 update:** P26 makes foreground generation prefer an authenticated,
+owner-scoped SSE result stream, with at most two 120-second connections before
+falling back to the existing authoritative status poller. It does not add
+background streaming, identity-recovery policy, or real-infrastructure
+reconnect evidence; see
+[authenticated-sse-client.md](sprints/authenticated-sse-client.md).
+
+**July 16 update:** P27 prevents a rejected refresh token from silently
+creating a new guest identity and thereby hiding the original library. It
+preserves local trip state and surfaces recovery as an explicit failure; full
+identity-recovery UI and Apple linking remain NXT-013 work. See
+[refresh-identity-preservation.md](sprints/refresh-identity-preservation.md).
+
+**July 16 update:** P28 gives generation progress a changing VoiceOver value
+and redirects identity-recovery failures to preserved Trips instead of a futile
+retry. Full VoiceOver traversal, Dynamic Type, localization, and recovery UI
+remain NXT-013/NXT-016 work; see
+[generation-accessibility-recovery.md](sprints/generation-accessibility-recovery.md).
+
+**July 16 update:** P29 makes invalid AI-edit output a stable public `422`
+without exposing provider/model validation text. Provider failures remain a
+generic `503`; broader error-contract normalization remains NXT-007 work. See
+[safe-ai-edit-validation-errors.md](sprints/safe-ai-edit-validation-errors.md).
+
+**July 16 update:** P30 makes the explicit Apple existing-library recovery
+path clear the prior account's local cache, progress, queue, draft, locked-stop,
+and notification state before refreshing the recovered library. A normal Apple
+link preserves local state. Principal namespaces, crash-safe account switching,
+and cross-device recovery verification remain NXT-013 work; see
+[apple-recovery-local-data-isolation.md](sprints/apple-recovery-local-data-isolation.md).
+
+**July 16 update:** P31 makes an invalid compiled iOS API URL a recoverable,
+accessible launch state rather than a `preconditionFailure` crash. It does not
+replace the Release HTTPS build guard, endpoint ownership, signing, or archive
+validation required by NXT-003; see
+[recoverable-ios-api-configuration.md](sprints/recoverable-ios-api-configuration.md).
+
+**July 16 update:** P32 changes collaboration invite deep links from immediate
+membership writes into an explicit, owner-visibility-aware confirmation. The
+server remains authoritative for invitation validity and authorization; broader
+collaboration product scope remains outside the internal-beta core loop. See
+[explicit-invite-deep-link-consent.md](sprints/explicit-invite-deep-link-consent.md).
+
+**July 16 update:** P33 clears the shared widget snapshot, reloads its
+timeline, and ends Live Activities during deletion and explicit Apple
+existing-library recovery. Full principal namespacing and crash-safe account
+transitions remain NXT-013 work; see
+[account-transition-presentation-cleanup.md](sprints/account-transition-presentation-cleanup.md).
+
+**July 16 update:** P34 serializes the deletion retry with ordinary in-process
+refresh-token rotation, so concurrent authenticated requests cannot race a
+single-use refresh token. Server refresh-family and multi-device semantics
+remain NXT-009/NXT-013 work; see
+[serialized-account-refresh.md](sprints/serialized-account-refresh.md).
+
+**July 16 update:** P35 persists the server-issued user UUID with iOS
+credentials while retaining safe legacy decoding and rejecting a refresh that
+changes an already bound principal. This is the first D2 identity prerequisite;
+principal-namespaced local stores remain NXT-013 work. See
+[persisted-principal-identity.md](sprints/persisted-principal-identity.md).
+
+**July 16 update:** P36 requires `user_id` in every new or refreshed iOS
+session response, preventing a new unscoped credential record from being
+created by an incomplete response. Legacy Keychain decoding remains safe;
+principal-namespaced stores remain NXT-013 work. See
+[required-session-principal.md](sprints/required-session-principal.md).
+
+**July 16 update:** P37 provides opaque principal-scoped constructors for
+completed trips, pending work, and stop progress, with cross-principal
+isolation tests. P38 now establishes the authenticated principal before
+AppState reads or writes those core stores, purging legacy unscoped core files
+rather than exposing them. P39 also scopes drafts and locked stops through the
+authenticated AppState path. Live Activity and notification namespaces remain
+NXT-013 work. P40 now gives the widget an opaque selected snapshot and
+clears Live Activities plus prior Itinera notifications during cold principal
+activation before the current library republishes presentation state. See
+[principal-scoped-presentation-state.md](sprints/principal-scoped-presentation-state.md).
+
+**July 16 update:** P40 completes the cold-start presentation-state safety
+boundary: no legacy widget snapshot can be selected, and prior Itinera Live
+Activities and notifications are removed before the current principal's library
+can republish them. See
+[principal-scoped-presentation-state.md](sprints/principal-scoped-presentation-state.md).
+
+**July 16 update:** P25 proves the downloaded-data cleanup action purges the
+completed offline-itinerary cache from published app state and disk; a
+server-confirmed account deletion additionally purges local stop progress and
+draft/locked-stop preferences, queued job/submission records, and retained
+credentials while rotating the device-scoped installation identifier. It keeps
+the existing credential only long enough to safely replay an incomplete local
+cleanup and never creates a guest account on that replay. See
+[offline-cache-deletion-proof.md](sprints/offline-cache-deletion-proof.md).
+
+**July 16 update:** P17 adds a server-generated opaque `X-Request-ID` to API
+responses and binds the same value to API logs and active traces. Support can
+correlate a reported failure without accepting a caller-controlled identifier
+or placing itinerary/user data in metric labels. Worker/mobile correlation,
+dashboards, alerts, and support runbooks remain NXT-015 work; see
+[request-correlation.md](sprints/request-correlation.md).
+
+**July 16 update:** P18 enforces a 256 KiB API-only request-body ceiling before
+route parsing, including chunked requests and duplicate `Content-Length`
+protection. It does not limit future file-upload routes: any such feature must
+define its own streaming, malware-scan, and object-storage contract; see
+[request-body-limit.md](sprints/request-body-limit.md).
+
 
 Record model and prompt version, input/output tokens, provider calls, latency,
 cache hits, retries, and estimated cost for 100% of jobs. Enforce per-job,
@@ -357,7 +540,7 @@ Complete these before a broad external beta or scale qualification.
 | NXT-010 | Split saved-trip summaries from full details; add stable cursor pagination | 1,000 trips page exactly once; bounded list payload; details load lazily |
 | NXT-011 | Add a versioned offline cache for completed trips | Cold airplane-mode launch shows recent full itineraries; deletion purges cache |
 | NXT-012 | Consume authenticated SSE with reconnect and polling fallback | One watcher per job; heartbeat/reconnect tested; traffic stays inside API budget |
-| NXT-013 | Add identity recovery and optional Sign in with Apple linking | A rejected refresh never silently abandons trips; guest data links without loss; retry-grace rotation is one-time and deterministic |
+| NXT-013 | Add identity recovery and optional Sign in with Apple linking | A rejected refresh never silently abandons trips; existing-library recovery clears old local state before refresh; principal namespaces and crash-safe switching remain; retry-grace rotation is one-time and deterministic |
 | NXT-014 | Generate or contract-test Swift models from OpenAPI | Additive compatibility policy; unknown enums do not break the whole list |
 | NXT-015 | Add privacy-safe observability and support correlation | API/worker/mobile traces, queue/job/provider/cost metrics, crash data, dashboards, alerts, runbooks |
 | NXT-016 | Complete accessibility and localization gates | VoiceOver, Dynamic Type, reduced motion, contrast, small-screen CI, localized dates/strings |
@@ -365,7 +548,7 @@ Complete these before a broad external beta or scale qualification.
 | NXT-018 | Budget database connections and data growth | Per-role pool budgets, timeouts, cleanup, and production-plan capacity test pass |
 | NXT-019 | Exercise backup, restore, and rollback | Agreed RPO/RTO demonstrated in staging; expand/migrate/contract policy documented |
 | NXT-020 | Create a product quality/support loop | Privacy-safe funnel, crash-free sessions, inaccurate-place reporting, support SLA, build dashboard |
-| NXT-021 | Harden the software supply chain | Runtime dependencies and base images are pinned; CI produces an SBOM and runs secret, dependency, and container vulnerability scans |
+| NXT-021 | Harden the software supply chain | Direct hosted-provider SDKs and the Python base-image digest are pinned; CI blocks on high/critical dependency, secret, and container findings and retains a runtime SBOM; all runtime dependencies still need a reproducible transitive lock |
 
 ## Scale qualification gate
 

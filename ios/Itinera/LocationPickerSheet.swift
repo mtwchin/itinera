@@ -163,7 +163,7 @@ struct LocationPickerSheet: View {
 
                 selectionPanel
             }
-            .background(theme.canvas.ignoresSafeArea())
+            .background(ItineraBackground())
             .navigationTitle(purpose.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -219,71 +219,102 @@ struct LocationPickerSheet: View {
     }
 
     private var selectionPanel: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let message {
-                    ItineraStatusBanner(message: message, kind: .error)
-                }
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(theme.border.opacity(0.45))
+                .frame(height: 1)
 
-                if !results.isEmpty {
-                    Text("SEARCH RESULTS")
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.4)
-                        .foregroundStyle(theme.secondaryText)
-
-                    ForEach(results, id: \.self) { result in
-                        Button {
-                            chooseSearchResult(result)
-                        } label: {
-                            resultRow(result)
-                        }
-                        .buttonStyle(.plain)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let message {
+                        ItineraStatusBanner(message: message, kind: .error)
                     }
-                }
 
-                if let candidate {
-                    Divider().overlay(theme.border)
+                    if !results.isEmpty {
+                        Text("RESULTS")
+                            .font(.caption2.weight(.bold))
+                            .tracking(1.6)
+                            .foregroundStyle(theme.secondaryText)
+                            .padding(.top, 2)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label("Selected", systemImage: "checkmark.circle.fill")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(theme.route)
-                        Text(inputLabel(for: candidate))
-                            .font(.headline)
-                            .foregroundStyle(theme.primaryText)
-                        if candidate.address != inputLabel(for: candidate) {
-                            Text(candidate.address)
+                        VStack(spacing: 8) {
+                            ForEach(results, id: \.self) { result in
+                                Button {
+                                    chooseSearchResult(result)
+                                } label: {
+                                    resultRow(result)
+                                }
+                                .buttonStyle(.plain)
+                                .revealOnAppear()
+                            }
+                        }
+                    }
+
+                    if let candidate {
+                        if !results.isEmpty {
+                            Divider().overlay(theme.border.opacity(0.6))
+                        }
+
+                        HStack(spacing: 14) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(theme.accentContrast)
+                                .frame(width: 44, height: 44)
+                                .background(theme.accent, in: Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(inputLabel(for: candidate))
+                                    .font(.headline)
+                                    .foregroundStyle(theme.primaryText)
+                                if candidate.address != inputLabel(for: candidate) {
+                                    Text(candidate.address)
+                                        .font(.caption)
+                                        .foregroundStyle(theme.secondaryText)
+                                        .lineLimit(2)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+
+                        Button("Use this location") {
+                            onConfirm(candidate)
+                            dismiss()
+                        }
+                        .buttonStyle(ItineraPrimaryButtonStyle())
+                        .accessibilityHint("Confirms the selected map location")
+
+                    } else if results.isEmpty && message == nil {
+                        VStack(spacing: 10) {
+                            Image(systemName: "hand.tap.fill")
+                                .font(.title2)
+                                .foregroundStyle(theme.accent.opacity(0.45))
+                            Text("Search by name or tap the map.\nConfirm before leaving.")
                                 .font(.footnote)
                                 .foregroundStyle(theme.secondaryText)
+                                .multilineTextAlignment(.center)
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                     }
-
-                    Button("Use this location") {
-                        onConfirm(candidate)
-                        dismiss()
-                    }
-                    .buttonStyle(ItineraPrimaryButtonStyle())
-                    .accessibilityHint("Confirms the selected map location")
-                } else if results.isEmpty && message == nil {
-                    Label(
-                        "Search by name, or tap the map. A location is saved only after you confirm it.",
-                        systemImage: "hand.tap"
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(theme.secondaryText)
                 }
+                .padding(16)
             }
-            .padding(16)
+            .frame(minHeight: 120, maxHeight: 320)
+            .background(theme.surface)
         }
-        .frame(maxHeight: 310)
-        .background(theme.surface)
     }
 
     private func resultRow(_ result: SelectedLocation) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: candidate == result ? "checkmark.circle.fill" : "mappin.circle")
-                .font(.title3)
-                .foregroundStyle(candidate == result ? theme.route : theme.accent)
+        let isSelected = candidate == result
+        return HStack(spacing: 12) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "mappin.circle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(isSelected ? theme.accentContrast : theme.route)
+                .frame(width: 34, height: 34)
+                .background(
+                    isSelected ? theme.accent : theme.route.opacity(0.10),
+                    in: Circle()
+                )
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.name)
                     .font(.subheadline.weight(.semibold))
@@ -293,10 +324,22 @@ struct LocationPickerSheet: View {
                     .foregroundStyle(theme.secondaryText)
                     .lineLimit(2)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 5)
+        .padding(12)
+        .background(
+            isSelected ? theme.accent.opacity(0.08) : theme.surfaceStrong.opacity(0.6),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isSelected ? theme.accent.opacity(0.35) : theme.border.opacity(0.5),
+                    lineWidth: 1
+                )
+        }
+        .animation(.easeInOut(duration: 0.2), value: isSelected)
     }
 
     private func startSearch() {

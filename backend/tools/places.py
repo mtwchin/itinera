@@ -8,6 +8,11 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
+import googlemaps
+import jwt
+import requests
+from jwt import PyJWTError
+
 _KNOWN_CITY_CENTERS: dict[str, tuple[float, float]] = {
     "amsterdam": (52.3676, 4.9041),
     "athens": (37.9838, 23.7275),
@@ -61,11 +66,6 @@ _KNOWN_CITY_CENTERS: dict[str, tuple[float, float]] = {
     "venice": (45.4408, 12.3155),
     "vienna": (48.2082, 16.3738),
 }
-
-import googlemaps
-import jwt
-import requests
-from jwt import PyJWTError
 
 APPLE_MAPS_API_URL = "https://maps-api.apple.com"
 

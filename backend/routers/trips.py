@@ -4,12 +4,21 @@ import hashlib
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import current_user
-from backend.db.models import ChecklistItem, Expense, PlaceReport, Reservation, User
+from backend.db.models import (
+    AgentRun,
+    ChecklistItem,
+    Expense,
+    PlaceReport,
+    Reservation,
+    User,
+)
 from backend.db.repo import (
     InvalidRevisionError,
     ItineraryVersionConflictError,
@@ -52,6 +61,22 @@ from backend.schemas.trips import (
 )
 
 router = APIRouter(tags=["trip-management"])
+
+
+def _add_editor_attempt(session: AsyncSession, *, itinerary_id, record: dict) -> None:
+    """Stage a privacy-safe editor provider call for the current transaction."""
+
+    session.add(
+        AgentRun(
+            itinerary_id=itinerary_id,
+            agent=record["agent"],
+            step_index=record["step_index"],
+            tool_calls=record["tool_calls"],
+            input=None,
+            output=None,
+            latency_ms=record["latency_ms"],
+        )
+    )
 
 
 def _not_found() -> HTTPException:
@@ -188,17 +213,17 @@ async def ai_edit_trip(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ItineraryRevisionResponse:
-    from backend.agents.editor import AIEditorError, apply_ai_edit
+    from backend.ai_consent import require_current_ai_consent
+    from backend.agents.editor import (
+        AIEditorError,
+        apply_ai_edit,
+        editor_attempt_metadata,
+        generate_fn_for_settings,
+    )
     from backend.config import get_settings
 
-    import anthropic as _anthropic
-
+    await require_current_ai_consent(session, user.id)
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI editing requires an Anthropic API key to be configured.",
-        )
 
     row = await get_itinerary_with_access(
         session, job_id=job_id, user_id=user.id, require_edit=True
@@ -215,22 +240,54 @@ async def ai_edit_trip(
 
     itinerary = ItinerarySchema.model_validate(row.result)
 
-    client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        generate = generate_fn_for_settings(settings)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    started_at = perf_counter()
+
+    def record_attempt() -> None:
+        _add_editor_attempt(
+            session,
+            itinerary_id=row.id,
+            record=editor_attempt_metadata(
+                generate, latency_ms=round((perf_counter() - started_at) * 1000)
+            ),
+        )
+
     try:
         operations = apply_ai_edit(
-            client,
-            settings.anthropic_model,
+            generate,
             itinerary,
             payload.message,
             payload.day,
         )
     except AIEditorError as exc:
+        record_attempt()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
+            detail=(
+                "The requested AI edit could not be applied. "
+                "Please try a more specific change."
+            ),
+        ) from exc
+    except Exception as exc:
+        logger.opt(exception=exc).error("AI itinerary edit failed for job {}", job_id)
+        record_attempt()
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI editing is temporarily unavailable. Please try again later.",
         ) from exc
 
     if not operations:
+        record_attempt()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="The AI determined no changes were needed for that request.",
@@ -246,12 +303,16 @@ async def ai_edit_trip(
         )
     except ItineraryVersionConflictError as exc:
         await session.rollback()
+        record_attempt()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"message": str(exc), "current_version": exc.current_version},
         ) from exc
     except InvalidRevisionError as exc:
         await session.rollback()
+        record_attempt()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
@@ -261,6 +322,7 @@ async def ai_edit_trip(
         raise _not_found()
 
     _, revision = revised
+    record_attempt()
     await session.commit()
     return _revision_response(job_id, revision)
 

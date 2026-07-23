@@ -32,6 +32,8 @@ services:
     envVars:
       - key: ENV
         value: prod
+      - key: API_REQUEST_MAX_BODY_BYTES
+        value: "262144"
       - key: DATABASE_URL
         fromDatabase:
           name: itinera-db
@@ -90,6 +92,19 @@ services:
         value: "30"
       - key: ITINERARY_STREAM_LEASE_RENEW_SECONDS
         value: "10"
+      - key: ITINERARY_EDITOR_MAX_OUTPUT_TOKENS
+        value: "8000"
+      # AI edits execute synchronously in the API process. Keep this provider
+      # selection identical to the generation worker and expose no discovery,
+      # maps, or other worker-only credentials here.
+      - key: ITINERARY_COMPOSER_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_REQUEST_TIMEOUT_SECONDS
+        value: "90"
 
   - type: worker
     name: itinera-worker
@@ -98,9 +113,10 @@ services:
     autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     preDeployCommand: alembic upgrade head
-    dockerCommand: celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4
-    # This list is intentionally explicit so the model-provider credential is
-    # available only to the process that calls the provider.
+    dockerCommand: sh -c "python -m backend.workers.preflight && exec celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4"
+    # This list is intentionally explicit. The selected OpenAI credential is
+    # also supplied to the API because authenticated AI edits run there;
+    # discovery, maps, and local-provider credentials remain worker-only.
     envVars:
       - key: ENV
         value: prod
@@ -123,8 +139,16 @@ services:
           type: keyvalue
           name: itinera-redis
           property: connectionString
+      - key: CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS
+        value: "180"
       - key: ITINERARY_JOB_LEASE_SECONDS
-        value: "3600"
+        value: "150"
+      - key: ITINERARY_JOB_SOFT_TIME_LIMIT_SECONDS
+        value: "105"
+      - key: ITINERARY_JOB_TIME_LIMIT_SECONDS
+        value: "120"
+      - key: ITINERARY_JOB_LEASE_COMPLETION_MARGIN_SECONDS
+        value: "30"
       - key: ITINERARY_COMPOSER_PROVIDER
         value: openai
       - key: OPENAI_API_KEY
@@ -132,7 +156,7 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5.6-luna
       - key: OPENAI_REQUEST_TIMEOUT_SECONDS
-        value: "180"
+        value: "90"
       # Retained for deployments that switch back to a private, authenticated
       # Ollama service. Render cannot reach the developer's laptop.
       - key: OLLAMA_BASE_URL
@@ -142,7 +166,7 @@ services:
       - key: OLLAMA_MODEL
         value: qwen2.5:7b-instruct
       - key: OLLAMA_REQUEST_TIMEOUT_SECONDS
-        value: "180"
+        value: "90"
       - key: TRENDS_PROVIDER
         value: http
       - key: TRENDS_FEED_URL
@@ -184,6 +208,6 @@ services:
           name: itinera-redis
           property: connectionString
       - key: OUTBOX_REDISPATCH_INITIAL_SECONDS
-        value: "300"
+        value: "15"
       - key: OUTBOX_REDISPATCH_MAX_SECONDS
-        value: "3600"
+        value: "120"

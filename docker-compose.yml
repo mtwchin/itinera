@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_USER: itinera
       POSTGRES_PASSWORD: itinera
@@ -16,7 +16,7 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:
       - "6379:6379"
     volumes:
@@ -28,7 +28,7 @@ services:
       retries: 10
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:latest@sha256:ab6f1a1f0fb49ea08bcd19f6b84f6081d0d44b364b6de148e1798eb5816bacac
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
@@ -89,7 +89,7 @@ services:
 
   worker:
     build: .
-    command: ["celery", "-A", "backend.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+    command: ["sh", "-c", "python -m backend.workers.preflight && exec celery -A backend.workers.celery_app:celery_app worker --loglevel=info --concurrency=4"]
     env_file:
       - path: .env
         required: false

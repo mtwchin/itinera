@@ -192,52 +192,69 @@ struct ItineraLogoMark: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(theme.highlight)
-
-            ItineraCompassNeedle()
+                .fill(
+                    RadialGradient(
+                        colors: [theme.highlight, theme.highlightStrong],
+                        center: UnitPoint(x: 0.36, y: 0.30),
+                        startRadius: 0,
+                        endRadius: size * 0.58
+                    )
+                )
+            Circle()
+                .strokeBorder(Color.white.opacity(0.20), lineWidth: max(1, size * 0.032))
+                .padding(size * 0.10)
+            ItineraCompassNS()
                 .fill(Color.white)
-                .frame(width: size * 0.68, height: size * 0.72)
+                .frame(width: size * 0.66, height: size * 0.66)
+            ItineraCompassEW()
+                .fill(Color.white.opacity(0.68))
+                .frame(width: size * 0.66, height: size * 0.66)
+            Circle()
+                .fill(theme.highlightStrong)
+                .frame(width: size * 0.13, height: size * 0.13)
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 }
 
-private struct ItineraCompassNeedle: Shape {
+private struct ItineraCompassNS: Shape {
     func path(in rect: CGRect) -> Path {
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(
-                x: rect.minX + rect.width * x,
-                y: rect.minY + rect.height * y
-            )
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
         }
-
         var path = Path()
-        path.move(to: point(0.5, 0.02))
-        path.addCurve(
-            to: point(0.36, 0.16),
-            control1: point(0.44, 0.02),
-            control2: point(0.39, 0.08)
-        )
-        path.addLine(to: point(0.05, 0.85))
-        path.addCurve(
-            to: point(0.18, 0.96),
-            control1: point(0.01, 0.92),
-            control2: point(0.11, 1.0)
-        )
-        path.addLine(to: point(0.5, 0.75))
-        path.addLine(to: point(0.82, 0.96))
-        path.addCurve(
-            to: point(0.95, 0.85),
-            control1: point(0.89, 1.0),
-            control2: point(0.99, 0.92)
-        )
-        path.addLine(to: point(0.64, 0.16))
-        path.addCurve(
-            to: point(0.5, 0.02),
-            control1: point(0.61, 0.08),
-            control2: point(0.56, 0.02)
-        )
+        path.move(to: p(0.5, 0.5))
+        path.addLine(to: p(0.405, 0.365))
+        path.addLine(to: p(0.5, 0.03))
+        path.addLine(to: p(0.595, 0.365))
+        path.closeSubpath()
+        path.move(to: p(0.5, 0.5))
+        path.addLine(to: p(0.415, 0.635))
+        path.addLine(to: p(0.5, 0.97))
+        path.addLine(to: p(0.585, 0.635))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct ItineraCompassEW: Shape {
+    func path(in rect: CGRect) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
+        }
+        var path = Path()
+        // East arm
+        path.move(to: p(0.5, 0.5))
+        path.addLine(to: p(0.635, 0.415))
+        path.addLine(to: p(0.97, 0.5))
+        path.addLine(to: p(0.635, 0.585))
+        path.closeSubpath()
+        // West arm
+        path.move(to: p(0.5, 0.5))
+        path.addLine(to: p(0.365, 0.415))
+        path.addLine(to: p(0.03, 0.5))
+        path.addLine(to: p(0.365, 0.585))
         path.closeSubpath()
         return path
     }
@@ -271,19 +288,30 @@ struct ItineraSurface<Content: View>: View {
 
 struct ItineraBrandHeader: View {
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let eyebrow: String
     let title: String
     let message: String
 
+    @State private var appeared = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 9) {
                 ItineraLogoMark(size: 40)
+                    .opacity(appeared ? 1 : 0)
+                    .scaleEffect(appeared ? 1 : 0.72)
+                    .animation(
+                        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.72).delay(0.06),
+                        value: appeared
+                    )
                 Text(eyebrow.uppercased())
                     .font(.caption.weight(.bold))
                     .tracking(2.1)
                     .foregroundStyle(theme.secondaryText)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3).delay(0.10), value: appeared)
             }
 
             Text(title)
@@ -291,14 +319,24 @@ struct ItineraBrandHeader: View {
                 .foregroundStyle(theme.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 8)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.35).delay(0.14), value: appeared)
 
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 6)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.32).delay(0.20), value: appeared)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .onAppear {
+            guard !appeared else { return }
+            appeared = true
+        }
     }
 }
 
@@ -337,9 +375,12 @@ struct ItineraStatusBanner: View {
     }
 
     @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let message: String
     let kind: Kind
+
+    @State private var appeared = false
 
     private var color: Color {
         switch kind {
@@ -365,6 +406,16 @@ struct ItineraStatusBanner: View {
             .padding(14)
             .background(color.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
             .accessibilityLabel(message)
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : -6)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.25),
+                value: appeared
+            )
+            .onAppear {
+                guard !appeared else { return }
+                appeared = true
+            }
     }
 }
 
@@ -444,5 +495,74 @@ private struct ItineraFieldModifier: ViewModifier {
 extension View {
     func itineraField() -> some View {
         modifier(ItineraFieldModifier())
+    }
+
+    func revealOnAppear(delay: Double = 0) -> some View {
+        modifier(RevealAnimation(delay: delay))
+    }
+}
+
+struct ItineraSkeletonRow: View {
+    @Environment(\.itineraTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPulsing = false
+
+    var body: some View {
+        ItineraSurface {
+            HStack(alignment: .top, spacing: 14) {
+                Circle()
+                    .fill(theme.surfaceStrong)
+                    .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(theme.surfaceStrong)
+                        .frame(height: 14)
+                        .frame(maxWidth: .infinity)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(theme.surfaceStrong)
+                        .frame(height: 11)
+                        .frame(maxWidth: 130)
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(theme.surfaceStrong)
+                            .frame(width: 70, height: 20)
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(theme.surfaceStrong)
+                            .frame(width: 55, height: 20)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 72)
+        }
+        .opacity(isPulsing ? 0.4 : 0.85)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
+            value: isPulsing
+        )
+        .onAppear { isPulsing = true }
+        .accessibilityHidden(true)
+    }
+}
+
+struct RevealAnimation: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hasAppeared = false
+    var delay: Double = 0
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(hasAppeared ? 1 : 0)
+            .offset(y: hasAppeared ? 0 : 16)
+            .onAppear {
+                if reduceMotion {
+                    hasAppeared = true
+                } else {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.82).delay(delay)) {
+                        hasAppeared = true
+                    }
+                }
+            }
     }
 }

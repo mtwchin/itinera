@@ -14,6 +14,7 @@ from jwt import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.ai_consent import CURRENT_AI_CONSENT_VERSION, GRANTED, WITHDRAWN
 from backend.auth import (
     DeletionIdentity,
     RefreshTokenError,
@@ -26,10 +27,16 @@ from backend.auth import (
     rotate_guest_refresh_token,
 )
 from backend.config import get_settings
-from backend.db.models import User
+from backend.db.models import AIConsentEvent, User
 from backend.db.repo import delete_user_data
 from backend.db.session import get_session
-from backend.schemas.auth import AppleIdentityRequest, AuthTokenResponse, RefreshTokenRequest
+from backend.schemas.auth import (
+    AIConsentRequest,
+    AIConsentResponse,
+    AppleIdentityRequest,
+    AuthTokenResponse,
+    RefreshTokenRequest,
+)
 from backend.schemas.errors import AdmissionErrorResponse
 from backend.schemas.trips import DeleteMyDataRequest
 
@@ -51,6 +58,44 @@ def _response(user_id, refresh_token: str) -> AuthTokenResponse:
         refresh_token=refresh_token,
         expires_in=settings.auth_access_token_ttl_seconds,
         refresh_expires_in=settings.auth_refresh_token_ttl_seconds,
+    )
+
+
+@router.post("/ai-consent", response_model=AIConsentResponse)
+async def grant_ai_consent(
+    payload: AIConsentRequest,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AIConsentResponse:
+    if payload.version != CURRENT_AI_CONSENT_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The requested AI disclosure version is no longer current.",
+        )
+    event = AIConsentEvent(user_id=user.id, version=payload.version, action=GRANTED)
+    session.add(event)
+    await session.flush()
+    await session.commit()
+    return AIConsentResponse(
+        version=event.version, action=event.action, recorded_at=event.recorded_at
+    )
+
+
+@router.delete("/ai-consent", response_model=AIConsentResponse)
+async def withdraw_ai_consent(
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AIConsentResponse:
+    event = AIConsentEvent(
+        user_id=user.id,
+        version=CURRENT_AI_CONSENT_VERSION,
+        action=WITHDRAWN,
+    )
+    session.add(event)
+    await session.flush()
+    await session.commit()
+    return AIConsentResponse(
+        version=event.version, action=event.action, recorded_at=event.recorded_at
     )
 
 

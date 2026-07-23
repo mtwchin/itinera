@@ -74,6 +74,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app.tests
         GENERATE_INFOPLIST_FILE: YES
+  ItineraUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ItineraUITests]
+    dependencies:
+      - target: Itinera
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itinera.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
   ItineraWidget:
     type: app-extension
     platform: iOS
@@ -105,3 +115,4 @@ schemes:
       config: Debug
       targets:
         - name: ItineraTests
+        - name: ItineraUITests

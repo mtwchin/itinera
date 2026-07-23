@@ -78,6 +78,17 @@
                ReferencedContainer = "container:Itinera.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "41B0C8A3E798C203B0776D6E"
+               BuildableName = "ItineraUITests.xctest"
+               BlueprintName = "ItineraUITests"
+               ReferencedContainer = "container:Itinera.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>
