@@ -255,6 +255,7 @@ struct Activity: Codable, Hashable, Identifiable, Sendable {
     var coordinates: Coordinates
     var placeId: String? = nil
     var source: String? = nil
+    var sourcePlatforms: [String]? = nil
     var retrievedAt: String? = nil
     var verificationState: String? = nil
     var openingHours: [String]? = nil
@@ -274,7 +275,7 @@ struct Activity: Codable, Hashable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case activityId = "id"
         case time, name, type, duration, description, address, coordinates
-        case placeId, source, retrievedAt, verificationState, openingHours
+        case placeId, source, sourcePlatforms, retrievedAt, verificationState, openingHours
         case phone, websiteUrl, reservationUrl, estimatedCost, accessibilityNotes
     }
 }
@@ -323,10 +324,11 @@ struct JobStatusResponse: Codable, Sendable {
     var status: JobState
     var result: Itinerary?
     var error: String?
+    var errorCode: String? = nil
     var version: Int = 1
 
     private enum CodingKeys: String, CodingKey {
-        case jobId, status, result, error, version
+        case jobId, status, result, error, errorCode, version
     }
 }
 
@@ -337,6 +339,7 @@ extension JobStatusResponse {
         status = try container.decode(JobState.self, forKey: .status)
         result = try container.decodeIfPresent(Itinerary.self, forKey: .result)
         error = try container.decodeIfPresent(String.self, forKey: .error)
+        errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
     }
 }
@@ -352,13 +355,14 @@ struct SavedItinerary: Codable, Identifiable, Sendable {
     var departureDate: String?
     var result: Itinerary?
     var error: String?
+    var errorCode: String? = nil
     var archivedAt: String? = nil
     var version: Int = 1
     var createdAt: String
 
     private enum CodingKeys: String, CodingKey {
         case jobId, status, title, sourcePublicItineraryId, city, country
-        case arrivalDate, departureDate, result, error, archivedAt, version
+        case arrivalDate, departureDate, result, error, errorCode, archivedAt, version
         case createdAt
     }
 
@@ -392,6 +396,7 @@ extension SavedItinerary {
         )
         result = try container.decodeIfPresent(Itinerary.self, forKey: .result)
         error = try container.decodeIfPresent(String.self, forKey: .error)
+        errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
         archivedAt = try container.decodeIfPresent(String.self, forKey: .archivedAt)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         createdAt = try container.decode(String.self, forKey: .createdAt)

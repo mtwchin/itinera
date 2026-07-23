@@ -10,7 +10,7 @@ import math
 import unicodedata
 import uuid
 from datetime import timedelta
-from typing import Protocol
+from typing import Mapping, Protocol
 from urllib.parse import urlparse
 
 import anthropic
@@ -22,6 +22,68 @@ from backend.schemas.itinerary import GenerateItineraryRequest, Itinerary
 
 
 GROUNDING_COORDINATE_TOLERANCE_DEGREES = 0.005
+COMPOSER_PROMPT_VERSION = "2026-07-16-v1"
+
+
+def _token_count(value: object) -> int | None:
+    """Return a provider-reported token count only when it is safe to persist."""
+
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _usage_from_attributes(
+    usage: object, input_field: str, output_field: str
+) -> dict[str, int] | None:
+    input_tokens = _token_count(getattr(usage, input_field, None))
+    output_tokens = _token_count(getattr(usage, output_field, None))
+    if input_tokens is None and output_tokens is None:
+        return None
+    return {
+        key: value
+        for key, value in (
+            ("input_tokens", input_tokens),
+            ("output_tokens", output_tokens),
+        )
+        if value is not None
+    }
+
+
+def _usage_from_mapping(
+    usage: Mapping[str, object], input_field: str, output_field: str
+) -> dict[str, int] | None:
+    input_tokens = _token_count(usage.get(input_field))
+    output_tokens = _token_count(usage.get(output_field))
+    if input_tokens is None and output_tokens is None:
+        return None
+    return {
+        key: value
+        for key, value in (
+            ("input_tokens", input_tokens),
+            ("output_tokens", output_tokens),
+        )
+        if value is not None
+    }
+
+
+def reported_composer_usage(composer: object) -> dict[str, int] | None:
+    """Get sanitized, provider-reported usage from the most recent compose call.
+
+    Usage is deliberately optional: no estimate is substituted when a provider
+    does not return a count or a call fails before a response is received.
+    """
+
+    usage = getattr(composer, "reported_usage", None)
+    if not isinstance(usage, dict):
+        return None
+    sanitized = {
+        key: value
+        for key, value in usage.items()
+        if key in {"input_tokens", "output_tokens"}
+        and _token_count(value) is not None
+    }
+    return sanitized or None
 
 
 def enrich_from_places(itinerary: Itinerary, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
@@ -57,9 +119,9 @@ def enrich_from_places(itinerary: Itinerary, request: GenerateItineraryRequest, 
             )
             if activity.id is None:
                 activity.id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, stable_key))
-            for attr in ("place_id", "source", "retrieved_at", "verification_state",
-                         "opening_hours", "phone", "website_url", "reservation_url",
-                         "estimated_cost", "accessibility_notes"):
+            for attr in ("place_id", "source", "source_platforms", "retrieved_at",
+                         "verification_state", "opening_hours", "phone", "website_url",
+                         "reservation_url", "estimated_cost", "accessibility_notes"):
                 if getattr(activity, attr) is None and place.get(attr) is not None:
                     setattr(activity, attr, place[attr])
 
@@ -157,6 +219,7 @@ def validate_itinerary_semantics(
             for attribute in (
                 "place_id",
                 "source",
+                "source_platforms",
                 "retrieved_at",
                 "verification_state",
                 "opening_hours",
@@ -176,20 +239,35 @@ def validate_itinerary_semantics(
     return itinerary
 
 
+_PLATFORM_LABELS = {
+    "tiktok": "TikTok",
+    "instagram_reels": "Instagram Reels",
+}
+
+
+def _platform_label(platform: str) -> str:
+    return _PLATFORM_LABELS.get(platform, platform.replace("_", " ").title())
+
+
 def _place_entry(index: int, place: dict) -> str:
     lat = place["coordinates"]["lat"]
     lng = place["coordinates"]["lng"]
     views = place.get("views", 0)
-    source = place.get("source", "unknown")
+    platforms = place.get("source_platforms") or []
+    source_label = (
+        " & ".join(_platform_label(p) for p in platforms)
+        if platforms
+        else place.get("source", "unknown")
+    )
     desc = (place.get("description") or "").strip()
-    if len(desc) > 220:
-        desc = desc[:217] + "..."
-    trend_line = f"   Popularity: {views:,} views [{source}]"
+    if len(desc) > 160:
+        desc = desc[:157] + "..."
+    trend = f"{views:,} views [{source_label}]"
     if desc:
-        trend_line += f' | "{desc}"'
+        trend += f' - "{desc}"'
     return (
         f"{index + 1}. {place['name']} ({place['type']}) at {place['address']} "
-        f"(lat {lat}, lng {lng})\n{trend_line}"
+        f"(lat {lat}, lng {lng}) | {trend}"
     )
 
 
@@ -248,6 +326,7 @@ Create a {days}-day itinerary that:
 11. Writes each activity's description as 2–3 specific sentences that go beyond generic labels — draw on the trending context and source descriptions to surface what makes this place worth visiting right now: what to order, best time to arrive, a local insight, or why it's resonating with travelers. Never use filler phrases like "a must-visit" or "a popular attraction."
 12. Sets estimated_cost per activity when determinable: "Free", "$10–20", "$$–$$$", etc.
 13. Gives each day a theme that reflects its actual character (neighborhood, vibe, or arc) rather than a generic label like "Day 1"
+14. Sets the `day` field of each day object to 1, 2, 3, … {days} exactly in that order (1-indexed, sequential, no gaps)
 
 Include practical travel tips in the tips array, accommodation logistics, transport guidance, and a realistic estimated total budget per person. Return only data that conforms to the supplied JSON schema."""
 
@@ -266,6 +345,7 @@ class OllamaComposer:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.api_key = api_key
+        self.reported_usage: dict[str, int] | None = None
 
     @property
     def endpoint(self) -> str:
@@ -273,6 +353,7 @@ class OllamaComposer:
         return f"{self.base_url}{suffix}"
 
     def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        self.reported_usage = None
         payload = {
             "model": self.model,
             "stream": False,
@@ -299,7 +380,13 @@ class OllamaComposer:
                 request_kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
             response = requests.post(self.endpoint, **request_kwargs)
             response.raise_for_status()
-            content = response.json()["message"]["content"]
+            response_payload = response.json()
+            if not isinstance(response_payload, Mapping):
+                raise TypeError("Ollama response is not an object")
+            self.reported_usage = _usage_from_mapping(
+                response_payload, "prompt_eval_count", "eval_count"
+            )
+            content = response_payload["message"]["content"]
             if isinstance(content, dict):
                 itinerary = Itinerary.model_validate(content)
             elif isinstance(content, str):
@@ -316,11 +403,17 @@ class OllamaComposer:
 class AnthropicComposer:
     """Optional hosted composer retained for deployments that choose Anthropic."""
 
-    def __init__(self, api_key: str, model: str) -> None:
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, api_key: str, model: str, timeout_seconds: int = 90) -> None:
+        # SDK-level retries make paid calls invisible to the application
+        # attempt ledger. Pipeline retries are the sole explicit retry budget.
+        self.client = anthropic.Anthropic(
+            api_key=api_key, timeout=timeout_seconds, max_retries=0
+        )
         self.model = model
+        self.reported_usage: dict[str, int] | None = None
 
     def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        self.reported_usage = None
         response = self.client.messages.parse(
             model=self.model,
             max_tokens=16000,
@@ -331,6 +424,9 @@ class AnthropicComposer:
             ),
             messages=[{"role": "user", "content": _prompt(request, places)}],
             output_format=Itinerary,
+        )
+        self.reported_usage = _usage_from_attributes(
+            getattr(response, "usage", None), "input_tokens", "output_tokens"
         )
         if response.parsed_output is None:
             raise ComposerError(
@@ -344,10 +440,13 @@ class OpenAIComposer:
     """Compose through the OpenAI Responses API with structured output."""
 
     def __init__(self, api_key: str, model: str, timeout_seconds: int = 180) -> None:
-        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds)
+        # Keep every paid call attributable to one pipeline attempt.
+        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
         self.model = model
+        self.reported_usage: dict[str, int] | None = None
 
     def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        self.reported_usage = None
         try:
             response = self.client.responses.parse(
                 model=self.model,
@@ -364,11 +463,25 @@ class OpenAIComposer:
                 text_format=Itinerary,
                 store=False,
             )
+            self.reported_usage = _usage_from_attributes(
+                getattr(response, "usage", None), "input_tokens", "output_tokens"
+            )
             itinerary = response.output_parsed
             if not isinstance(itinerary, Itinerary):
                 raise TypeError("OpenAI response did not contain a parsed itinerary")
             return validate_itinerary_semantics(itinerary, request, places)
-        except (OpenAIError, ValidationError, KeyError, TypeError, ValueError) as exc:
+        except ComposerError:
+            raise
+        except OpenAIError as exc:
+            if getattr(exc, "status_code", None) in (401, 403):
+                raise ComposerError(
+                    "OpenAI authentication or model access failed. Check OPENAI_API_KEY "
+                    "and project permissions."
+                ) from exc
+            raise ComposerError(
+                f"OpenAI model {self.model!r} did not return a valid itinerary"
+            ) from exc
+        except (ValidationError, KeyError, TypeError, ValueError) as exc:
             raise ComposerError(
                 f"OpenAI model {self.model!r} did not return a valid itinerary"
             ) from exc
@@ -382,12 +495,15 @@ class GroqComposer:
             api_key=api_key,
             base_url="https://api.groq.com/openai/v1",
             timeout=timeout_seconds,
+            max_retries=0,
         )
         self.model = model
+        self.reported_usage: dict[str, int] | None = None
 
     def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
         import json as _json
 
+        self.reported_usage = None
         schema = _json.dumps(Itinerary.model_json_schema(), indent=2)
         try:
             response = self.client.chat.completions.create(
@@ -405,6 +521,9 @@ class GroqComposer:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0,
+            )
+            self.reported_usage = _usage_from_attributes(
+                getattr(response, "usage", None), "prompt_tokens", "completion_tokens"
             )
             content = response.choices[0].message.content
             itinerary = Itinerary.model_validate_json(content)
@@ -425,8 +544,10 @@ class GeminiComposer:
         self._types = genai_types
         self.client = genai.Client(api_key=api_key)
         self.model = model
+        self.reported_usage: dict[str, int] | None = None
 
     def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        self.reported_usage = None
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -439,6 +560,11 @@ class GeminiComposer:
                     response_mime_type="application/json",
                     response_schema=Itinerary,
                 ),
+            )
+            self.reported_usage = _usage_from_attributes(
+                getattr(response, "usage_metadata", None),
+                "prompt_token_count",
+                "candidates_token_count",
             )
             if response.parsed is not None and isinstance(response.parsed, Itinerary):
                 itinerary = response.parsed

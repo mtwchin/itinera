@@ -5,7 +5,21 @@ from datetime import date as Date
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationInfo,
+    model_validator,
+)
+
+from backend.generation_policy import (
+    CURRENT_GENERATION_POLICY_VERSION,
+    MAX_BETA_TRIP_NIGHTS,
+    max_trip_nights_for_policy,
+)
+from backend.schemas.errors import GenerationFailureCode, public_generation_failure
 
 
 Name = Annotated[
@@ -170,12 +184,21 @@ class GenerateItineraryRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_trip_dates(self) -> "GenerateItineraryRequest":
+    def _validate_trip_dates(self, info: ValidationInfo) -> "GenerateItineraryRequest":
         nights = (self.departure_date - self.arrival_date).days
         if nights <= 0:
             raise ValueError("departure_date must be after arrival_date")
-        if nights > 30:
-            raise ValueError("trip length cannot exceed 30 days")
+        generation_policy_version = (info.context or {}).get(
+            "generation_policy_version", CURRENT_GENERATION_POLICY_VERSION
+        )
+        maximum_nights = max_trip_nights_for_policy(generation_policy_version)
+        if nights > maximum_nights:
+            beta_suffix = (
+                " during the beta" if maximum_nights == MAX_BETA_TRIP_NIGHTS else ""
+            )
+            raise ValueError(
+                f"trip length cannot exceed {maximum_nights} days{beta_suffix}"
+            )
         for reservation in self.fixed_reservations:
             if not (self.arrival_date <= reservation.starts_at.date() <= self.departure_date):
                 raise ValueError("fixed reservations must fall within the trip dates")
@@ -202,6 +225,9 @@ class Activity(BaseModel):
     source: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
     ] | None = None
+    source_platforms: list[
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+    ] | None = Field(default=None, max_length=10)
     retrieved_at: datetime | None = None
     verification_state: Literal[
         "unverified", "provider_verified", "user_reported", "stale"
@@ -265,6 +291,7 @@ class JobStatusResponse(BaseModel):
     status: Literal["pending", "running", "succeeded", "failed"]
     result: Itinerary | None = None
     error: str | None = None
+    error_code: GenerationFailureCode | None = None
     version: int = Field(default=1, ge=1)
 
 
@@ -278,6 +305,7 @@ class SavedItinerary(BaseModel):
     departure_date: Date | None = None
     result: Itinerary | None = None
     error: str | None = None
+    error_code: GenerationFailureCode | None = None
     source_public_itinerary_id: uuid.UUID | None = None
     archived_at: datetime | None = None
     version: int = Field(default=1, ge=1)
@@ -286,6 +314,11 @@ class SavedItinerary(BaseModel):
     @classmethod
     def from_row(cls, row) -> "SavedItinerary":  # row: backend.db.models.Itinerary
         req = row.request or {}
+        failure = (
+            public_generation_failure(getattr(row, "failure_code", None))
+            if row.status.value == "failed"
+            else None
+        )
         return cls(
             job_id=row.job_id,
             status=row.status.value,
@@ -295,7 +328,8 @@ class SavedItinerary(BaseModel):
             arrival_date=req.get("arrival_date"),
             departure_date=req.get("departure_date"),
             result=row.result,
-            error=row.error,
+            error=failure.message if failure is not None else None,
+            error_code=failure.code if failure is not None else None,
             source_public_itinerary_id=row.source_public_itinerary_id,
             archived_at=row.archived_at,
             version=row.version or 1,

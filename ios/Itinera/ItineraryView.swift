@@ -55,6 +55,8 @@ struct ItineraryView: View {
                             title: day.theme,
                             message: "A paced overview of the day's stops."
                         )
+                        .id(selectedDay)
+                        .transition(.opacity)
 
                         if let calendarStatusMessage {
                             ItineraStatusBanner(
@@ -71,35 +73,64 @@ struct ItineraryView: View {
 
                         daySelector
 
-                        mapCard(for: day)
-
-                        travelLegsCard(for: day)
-
-                        HStack(spacing: 8) {
-                            ItineraPill(
-                                text: "\(day.activities.count) \(day.activities.count == 1 ? "stop" : "stops")",
-                                systemImage: "mappin.and.ellipse"
-                            )
-                            ItineraPill(
-                                text: itinerary.estimatedBudget,
-                                systemImage: "banknote"
-                            )
+                        if tripID != nil {
+                            HStack(spacing: 10) {
+                                Button { isShowingAIEdit = true } label: {
+                                    ItineraPill(text: "Ask AI", systemImage: "sparkles")
+                                }
+                                .buttonStyle(.plain)
+                                Button { isShowingEditor = true } label: {
+                                    ItineraPill(text: "Edit stops", systemImage: "slider.horizontal.3")
+                                }
+                                .buttonStyle(.plain)
+                                Button { isShowingTripTools = true } label: {
+                                    ItineraPill(text: "Trip tools", systemImage: "checklist")
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .revealOnAppear()
                         }
 
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(day.activities.enumerated()), id: \.element.id) { index, activity in
-                                ActivityTimelineRow(
-                                    activity: activity,
-                                    index: index,
-                                    isLast: index == day.activities.count - 1,
-                                    onSelect: { selectedActivity = activity }
+                        VStack(alignment: .leading, spacing: 18) {
+                            mapCard(for: day)
+                                .revealOnAppear()
+
+                            travelLegsCard(for: day)
+                                .revealOnAppear()
+
+                            HStack(spacing: 8) {
+                                ItineraPill(
+                                    text: "\(day.activities.count) \(day.activities.count == 1 ? "stop" : "stops")",
+                                    systemImage: "mappin.and.ellipse"
+                                )
+                                ItineraPill(
+                                    text: itinerary.estimatedBudget,
+                                    systemImage: "banknote"
                                 )
                             }
-                        }
+                            .revealOnAppear()
 
-                        if selectedDay == itinerary.itinerary.last?.day {
-                            tripNotes
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(day.activities.enumerated()), id: \.element.id) { index, activity in
+                                    ActivityTimelineRow(
+                                        activity: activity,
+                                        index: index,
+                                        isLast: index == day.activities.count - 1,
+                                        onSelect: { selectedActivity = activity }
+                                    )
+                                    .revealOnAppear(delay: Double(index) * 0.06)
+                                }
+                            }
+
+                            if selectedDay == itinerary.itinerary.last?.day {
+                                tripNotes
+                            }
                         }
+                        .id(selectedDay)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .leading).combined(with: .opacity)
+                        ))
                     }
                 }
                 .padding(.horizontal, 18)
@@ -160,6 +191,7 @@ struct ItineraryView: View {
                 }
             }
         }
+        .sensoryFeedback(.selection, trigger: selectedDay)
         .onAppear {
             selectedDay = itinerary.itinerary.first?.day ?? 1
         }
@@ -270,9 +302,11 @@ struct ItineraryView: View {
                             if selectedDay == itineraryDay.day {
                                 Image(systemName: "location.fill")
                                     .font(.caption)
+                                    .transition(.scale(scale: 0.4).combined(with: .opacity))
                             }
                             Text("Day \(itineraryDay.day)")
                         }
+                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedDay == itineraryDay.day)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(
                             selectedDay == itineraryDay.day
@@ -334,13 +368,30 @@ struct ItineraryView: View {
                     message: "Times and paths come from Apple Maps and may change with local conditions."
                 )
 
-                Picker("Travel mode", selection: $transportMode) {
+                HStack(spacing: 8) {
                     ForEach(TripTransportMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage)
-                            .tag(mode)
+                        Button {
+                            withAnimation(.snappy) { transportMode = mode }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: mode.systemImage)
+                                Text(mode.title)
+                            }
+                            .font(.subheadline.weight(transportMode == mode ? .semibold : .regular))
+                            .foregroundStyle(transportMode == mode ? .white : theme.primaryText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                transportMode == mode ? theme.route : theme.route.opacity(0.09),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(mode.title)
+                        .accessibilityAddTraits(transportMode == mode ? .isSelected : [])
                     }
                 }
-                .pickerStyle(.segmented)
+                .sensoryFeedback(.selection, trigger: transportMode)
 
                 switch routeState {
                 case .idle, .loading:
@@ -435,15 +486,19 @@ struct ItineraryView: View {
                             Image(systemName: "sparkles")
                                 .foregroundStyle(theme.highlight)
                         }
+                        .revealOnAppear()
                     }
                 }
             }
+            .revealOnAppear()
 
             ItineraSurface {
                 HStack(spacing: 14) {
                     Image(systemName: "banknote.fill")
-                        .font(.title2)
-                        .foregroundStyle(theme.route)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(theme.success)
+                        .frame(width: 42, height: 42)
+                        .background(theme.success.opacity(0.12), in: Circle())
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Estimated trip budget")
                             .font(.caption)
@@ -455,6 +510,7 @@ struct ItineraryView: View {
                     Spacer()
                 }
             }
+            .revealOnAppear()
         }
     }
 }
@@ -670,7 +726,7 @@ struct ActivityTimelineRow: View {
             VStack(spacing: 0) {
                 ZStack {
                     Circle()
-                        .fill(theme.highlightStrong)
+                        .fill(typeColor(for: activity.type))
                         .frame(width: 34, height: 34)
                     Text("\(index + 1)")
                         .font(.caption.monospacedDigit().weight(.bold))
@@ -680,7 +736,7 @@ struct ActivityTimelineRow: View {
 
                 if !isLast {
                     Rectangle()
-                        .fill(theme.route.opacity(0.5))
+                        .fill(typeColor(for: activity.type).opacity(0.35))
                         .frame(width: 2)
                         .frame(minHeight: 128, maxHeight: .infinity)
                 }
@@ -696,7 +752,7 @@ struct ActivityTimelineRow: View {
                             ItineraPill(text: activity.duration, systemImage: "clock")
                             Spacer(minLength: 0)
                             Image(systemName: icon(for: activity.type))
-                                .foregroundStyle(theme.highlightStrong)
+                                .foregroundStyle(typeColor(for: activity.type))
                                 .accessibilityLabel(activity.type)
                         }
 
@@ -740,6 +796,16 @@ struct ActivityTimelineRow: View {
         }
     }
 
+    private func typeColor(for type: String) -> Color {
+        switch type {
+        case "food":     return theme.highlight
+        case "culture":  return theme.accent
+        case "nature":   return theme.success
+        case "shopping": return theme.route
+        default:         return theme.highlightStrong
+        }
+    }
+
 }
 
 private struct ActivityDetailSheet: View {
@@ -779,6 +845,7 @@ private struct ActivityDetailSheet: View {
                                 )
                                 .stroke(theme.border, lineWidth: 1)
                             }
+                            .revealOnAppear()
 
                         ItineraSurface {
                             VStack(alignment: .leading, spacing: 14) {
@@ -817,18 +884,29 @@ private struct ActivityDetailSheet: View {
                                     )
                                 }
 
+                                if let platforms = activity.sourcePlatforms, !platforms.isEmpty {
+                                    detailRow(
+                                        title: "Discovered on",
+                                        value: platforms.map { socialPlatformLabel($0) }.joined(separator: " & "),
+                                        systemImage: "sparkles"
+                                    )
+                                }
+
                                 if let phone = activity.phone,
                                    let phoneURL = URL(string: "tel:\(phone.filter { $0.isNumber || $0 == "+" })") {
                                     Link(destination: phoneURL) {
                                         Label("Call \(phone)", systemImage: "phone.fill")
+                                            .frame(maxWidth: .infinity)
                                     }
-                                    .font(.subheadline.weight(.semibold))
+                                    .buttonStyle(.bordered)
+                                    .tint(theme.route)
                                 }
 
                                 if let reservationURL = activity.reservationUrl,
                                    let url = URL(string: reservationURL) {
                                     Link(destination: url) {
                                         Label("Reservation options", systemImage: "calendar.badge.plus")
+                                            .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(.bordered)
                                     .tint(theme.accent)
@@ -838,8 +916,10 @@ private struct ActivityDetailSheet: View {
                                    let url = URL(string: websiteURL) {
                                     Link(destination: url) {
                                         Label("Visit website", systemImage: "safari")
+                                            .frame(maxWidth: .infinity)
                                     }
-                                    .font(.subheadline.weight(.semibold))
+                                    .buttonStyle(.bordered)
+                                    .tint(theme.accent)
                                 }
 
                                 Button(action: openInMaps) {
@@ -865,6 +945,7 @@ private struct ActivityDetailSheet: View {
                                 }
                             }
                         }
+                        .revealOnAppear()
                     }
                     .padding(18)
                     .padding(.bottom, 18)
@@ -910,6 +991,14 @@ private struct ActivityDetailSheet: View {
         } icon: {
             Image(systemName: systemImage)
                 .foregroundStyle(theme.route)
+        }
+    }
+
+    private func socialPlatformLabel(_ platform: String) -> String {
+        switch platform {
+        case "tiktok": return "TikTok"
+        case "instagram_reels": return "Instagram Reels"
+        default: return platform.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 
@@ -990,13 +1079,13 @@ private struct AIEditSheet: View {
     @State private var isWorking = false
     @State private var errorMessage: String?
 
-    private let suggestions: [(label: String, prompt: String)] = [
-        ("More food stops", "Add more local food spots and dining experiences to the afternoon"),
-        ("Add morning activity", "Add an early morning activity before the first listed stop"),
-        ("More relaxed pace", "Make this day more relaxed — fewer stops, more time at each location"),
-        ("Hidden gems only", "Replace touristy spots with lesser-known local favorites that most visitors miss"),
-        ("Optimize route order", "Reorder the activities to create a smarter route with less backtracking"),
-        ("Add a sunset stop", "Add a scenic viewpoint or rooftop stop timed to catch the sunset"),
+    private let suggestions: [(label: String, prompt: String, icon: String)] = [
+        ("More food stops", "Add more local food spots and dining experiences to the afternoon", "fork.knife"),
+        ("Add morning activity", "Add an early morning activity before the first listed stop", "sunrise.fill"),
+        ("More relaxed pace", "Make this day more relaxed — fewer stops, more time at each location", "tortoise.fill"),
+        ("Hidden gems only", "Replace touristy spots with lesser-known local favorites that most visitors miss", "star.fill"),
+        ("Optimize route order", "Reorder the activities to create a smarter route with less backtracking", "arrow.triangle.swap"),
+        ("Add a sunset stop", "Add a scenic viewpoint or rooftop stop timed to catch the sunset", "sunset.fill"),
     ]
 
     var body: some View {
@@ -1027,7 +1116,11 @@ private struct AIEditSheet: View {
                                         Button {
                                             Task { await submit(suggestion.prompt) }
                                         } label: {
-                                            HStack {
+                                            HStack(spacing: 12) {
+                                                Image(systemName: suggestion.icon)
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(theme.highlight)
+                                                    .frame(width: 24)
                                                 Text(suggestion.label)
                                                     .font(.subheadline)
                                                     .foregroundStyle(theme.primaryText)
@@ -1052,6 +1145,7 @@ private struct AIEditSheet: View {
                                 }
                             }
                         }
+                        .revealOnAppear()
 
                         ItineraSurface {
                             VStack(alignment: .leading, spacing: 14) {
@@ -1066,9 +1160,8 @@ private struct AIEditSheet: View {
                                     axis: .vertical
                                 )
                                 .lineLimit(3...6)
-                                .textFieldStyle(.plain)
                                 .font(.subheadline)
-                                .foregroundStyle(theme.primaryText)
+                                .itineraField()
                                 .disabled(isWorking)
 
                                 Button {
@@ -1089,10 +1182,12 @@ private struct AIEditSheet: View {
                                 .disabled(isWorking || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
                         }
+                        .revealOnAppear(delay: 0.08)
                     }
                     .padding(18)
                     .padding(.bottom, 18)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("Ask AI")
             .navigationBarTitleDisplayMode(.inline)
