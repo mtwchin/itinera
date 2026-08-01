@@ -506,6 +506,22 @@ class PlaceCache(Base):
     )
 
 
+class DeviceToken(Base):
+    __tablename__ = "device_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(16), default="apns")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 

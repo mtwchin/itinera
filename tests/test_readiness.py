@@ -25,7 +25,7 @@ BASE_REGISTRY = [
 
 
 def test_resolve_required_revision_uses_the_single_script_head():
-    assert resolve_required_revision() == "a3e7c1f9b204"
+    assert resolve_required_revision() == "b5f2e8d1c093"
 
 
 @pytest.mark.parametrize("heads", [[], ["one", "two"]])

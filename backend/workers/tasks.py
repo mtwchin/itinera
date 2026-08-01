@@ -9,9 +9,15 @@ from loguru import logger
 from backend.agents.pipeline import run_pipeline
 from backend.config import get_settings
 from backend.db.models import JobStatus
-from backend.db.repo import claim_job_sync, finish_job_sync, heartbeat_job_sync
+from backend.db.repo import (
+    claim_job_sync,
+    finish_job_sync,
+    get_device_tokens_for_job_sync,
+    heartbeat_job_sync,
+)
 from backend.generation_failures import classify_generation_failure, public_generation_failure
 from backend.itinerary_state import itinerary_stream_channel
+from backend.push import send_trip_ready_notification
 from backend.workers.celery_app import celery_app
 
 _settings = get_settings()
@@ -96,13 +102,24 @@ def run_itinerary_pipeline(
         if not persisted:
             raise RuntimeError(f"Itinerary job {job_id} lost its execution lease")
 
-        result = {
+        _publish(client, job_id, {"type": "succeeded", "job_id": job_id})
+
+        try:
+            device_tokens = get_device_tokens_for_job_sync(job_id)
+            send_trip_ready_notification(
+                device_tokens=device_tokens,
+                job_id=job_id,
+                title=itinerary.get("title") if isinstance(itinerary, dict) else None,
+                settings=_settings,
+            )
+        except Exception:
+            logger.exception("APNs dispatch failed for job {}", job_id)
+
+        return {
             "job_id": job_id,
             "status": "succeeded",
             "version": claim.version,
         }
-        _publish(client, job_id, {"type": "succeeded", "job_id": job_id})
-        return result
     except Exception as exc:
         # The database and client-facing event contain only a stable public
         # code. Celery's private task logs retain the exception and traceback

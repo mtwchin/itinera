@@ -12,5 +12,7 @@
 	<array>
 		<string>group.com.itinera.shared</string>
 	</array>
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

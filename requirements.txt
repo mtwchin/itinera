@@ -3,7 +3,8 @@ fastapi==0.115.5
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
 pydantic-settings==2.7.0
-httpx==0.28.1
+httpx[http2]==0.28.1
+h2==4.1.0
 
 # --- Database (async SQLAlchemy + Alembic) ---
 sqlalchemy[asyncio]==2.0.36

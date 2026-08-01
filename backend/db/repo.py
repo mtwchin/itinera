@@ -37,6 +37,7 @@ from backend.db.models import (
     JobStatus,
     OutboxEvent,
     PublicItinerary,
+    DeviceToken,
     TripCollaborator,
     User,
 )
@@ -1186,3 +1187,40 @@ def finish_job_sync(
             agent_runs=agent_runs,
         )
     )
+
+
+async def upsert_device_token(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    token: str,
+) -> DeviceToken:
+    """Register or refresh a push notification token for a user."""
+    existing = await session.scalar(
+        select(DeviceToken).where(DeviceToken.token == token)
+    )
+    if existing is not None:
+        if existing.user_id != user_id:
+            existing.user_id = user_id
+        return existing
+    row = DeviceToken(user_id=user_id, token=token)
+    session.add(row)
+    return row
+
+
+async def _get_device_tokens_for_job(job_id: str) -> list[str]:
+    engine, maker = _worker_maker()
+    try:
+        async with maker() as session:
+            result = await session.execute(
+                select(DeviceToken.token)
+                .join(Itinerary, Itinerary.user_id == DeviceToken.user_id)
+                .where(Itinerary.job_id == job_id)
+            )
+            return list(result.scalars().all())
+    finally:
+        await engine.dispose()
+
+
+def get_device_tokens_for_job_sync(job_id: str) -> list[str]:
+    return asyncio.run(_get_device_tokens_for_job(job_id))

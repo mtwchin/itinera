@@ -13,7 +13,7 @@ from backend.observability.logging import configure_logging
 from backend.observability.tracing import configure_tracing
 from backend.request_body_limit import RequestBodyLimitMiddleware
 from backend.routers import auth as auth_router
-from backend.routers import health, itineraries, trips
+from backend.routers import health, itineraries, notifications, trips
 from backend.stream_status import terminate_stream_status_pool
 
 
@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router, prefix="/api/v1")
     app.include_router(itineraries.router, prefix="/api/v1")
     app.include_router(trips.router, prefix="/api/v1")
+    app.include_router(notifications.router, prefix="/api/v1")
 
     if settings.metrics_enabled:
         Instrumentator().instrument(app).expose(app, endpoint="/metrics")

@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     apple_maps_key_id: str | None = None
     apple_maps_private_key: str | None = None
 
+    apns_key_id: str | None = None
+    apns_key_p8: str | None = None
+    apns_team_id: str | None = None
+    apns_bundle_id: str = "com.itinera.app"
+    apns_env: Literal["sandbox", "production"] = "sandbox"
+    apns_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
     clerk_jwks_url: str | None = None
     clerk_issuer: str | None = None
 

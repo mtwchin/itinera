@@ -20,6 +20,9 @@ struct ItineraApp: App {
                     appState: appState,
                     settingsPreferences: settingsPreferences
                 )
+                .onAppear {
+                    appDelegate.apiClient = appState.apiClient
+                }
             } else {
                 StartupConfigurationFailureView(
                     message: bootstrap.errorMessage
@@ -224,13 +227,12 @@ struct ContentView: View {
         } message: {
             Text(deepLinkError ?? "The link is invalid or expired.")
         }
-        .confirmationDialog(
+        .alert(
             "Join shared trip?",
             isPresented: Binding(
                 get: { pendingInviteToken != nil },
                 set: { if !$0 { pendingInviteToken = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("Join trip") {
                 Task { await acceptPendingInvite() }
@@ -310,12 +312,37 @@ struct ContentView: View {
 }
 
 final class ItineraAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    var apiClient: APIClient?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        guard let client = apiClient else { return }
+        Task {
+            do {
+                try await client.registerDeviceToken(token)
+            } catch {
+                // Non-fatal: local notifications still work; retry on next launch.
+            }
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        // Simulator and builds without the entitlement land here; local
+        // notifications continue to work normally.
     }
 
     nonisolated func userNotificationCenter(

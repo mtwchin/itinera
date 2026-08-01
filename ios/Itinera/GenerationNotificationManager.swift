@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UserNotifications
 
 struct GenerationNotificationContent: Equatable, Sendable {
@@ -44,7 +45,13 @@ final class GenerationNotificationManager {
     }
 
     func requestAuthorization() async throws -> Bool {
-        try await center.requestAuthorization(options: [.alert, .badge, .sound])
+        let granted = try await center.requestAuthorization(options: [.alert, .badge, .sound])
+        if granted {
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+        return granted
     }
 
     func authorizationStatus() async -> UNAuthorizationStatus {

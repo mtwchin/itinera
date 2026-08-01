@@ -138,11 +138,23 @@ struct ItinerarySSEEventDecoder {
         }
         return nil
     }
+
+    /// `URLSession.AsyncBytes.lines` may omit the final empty line when a
+    /// server closes immediately after a correctly terminated SSE frame.
+    /// Flush any buffered frame at EOF so a terminal event is not discarded
+    /// and needlessly recovered through polling.
+    mutating func finish() throws -> JobStatusResponse? {
+        guard !dataLines.isEmpty else { return nil }
+        return try consume(line: "")
+    }
 }
 
 actor APIClient {
     private struct TokenResponse: Decodable, Sendable {
-        let userID: String
+        // JSONDecoder's `.convertFromSnakeCase` maps `user_id` to `userId`,
+        // not `userID`. Keep this spelling aligned with the decoded key so a
+        // valid session response does not fail before identity validation.
+        let userId: String
         let accessToken: String
         let refreshToken: String?
         let tokenType: String
@@ -387,6 +399,16 @@ actor APIClient {
         )
     }
 
+    func registerDeviceToken(_ token: String) async throws {
+        struct Payload: Encodable { let token: String; let platform: String }
+        let body = try encoder.encode(Payload(token: token, platform: "apns"))
+        try await sendWithoutResponse(
+            path: "/api/v1/notifications/device-token",
+            method: "POST",
+            body: body
+        )
+    }
+
     /// Returns the stable server principal before the caller reads or writes
     /// principal-scoped device state. Legacy credentials are refreshed once to
     /// enrich them with the now-required `user_id` contract.
@@ -579,6 +601,10 @@ actor APIClient {
                status.status == .succeeded || status.status == .failed {
                 return status
             }
+        }
+        if let status = try decoder.finish(),
+           status.status == .succeeded || status.status == .failed {
+            return status
         }
         return nil
     }
@@ -827,7 +853,7 @@ actor APIClient {
         from response: TokenResponse,
         existingUserID: String? = nil
     ) throws -> String? {
-        guard let userID = UUID(uuidString: response.userID) else {
+        guard let userID = UUID(uuidString: response.userId) else {
             throw APIError.decoding
         }
         let normalizedUserID = userID.uuidString.lowercased()
