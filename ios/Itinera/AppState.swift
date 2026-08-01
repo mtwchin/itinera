@@ -308,12 +308,14 @@ final class AppState: ObservableObject {
     func reviseTrip(
         jobID: String,
         expectedVersion: Int,
+        mutationId: String,
         operations: [TripRevisionOperation]
     ) async throws -> ItineraryRevisionResponse {
         try await activatePrincipalScopedStores()
         let response = try await apiClient.reviseTrip(
             jobID,
             expectedVersion: expectedVersion,
+            mutationId: mutationId,
             operations: operations
         )
         var trip = await fallbackCompletedTrip(

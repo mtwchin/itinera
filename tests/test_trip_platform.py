@@ -357,6 +357,59 @@ def test_revision_rejects_out_of_range_activity_without_partial_mutation():
     assert len(original["itinerary"][0]["activities"]) == 2
 
 
+def test_id_based_remove_targets_correct_activity_when_indices_shift():
+    """Stable activity_id lookup is unaffected by prior inserts in the same batch."""
+    original = result()
+    materialize_activity_ids(original, trip_namespace="trip-test")
+    id_of_b = original["itinerary"][0]["activities"][1]["id"]
+    edited = apply_itinerary_operations(
+        original,
+        [
+            {"type": "add_activity", "day": 1, "position": 0, "activity": activity("Z")},
+            {"type": "remove_activity", "day": 1, "activity_id": id_of_b},
+        ],
+    )
+    names = [a["name"] for a in edited["itinerary"][0]["activities"]]
+    assert "B" not in names
+    assert "Z" in names
+    assert "A" in names
+
+
+def test_id_based_replace_targets_correct_activity():
+    original = result()
+    materialize_activity_ids(original, trip_namespace="trip-test")
+    id_of_a = original["itinerary"][0]["activities"][0]["id"]
+    edited = apply_itinerary_operations(
+        original,
+        [{"type": "replace_activity", "day": 1, "activity_id": id_of_a, "activity": activity("X")}],
+    )
+    names = [a["name"] for a in edited["itinerary"][0]["activities"]]
+    assert names[0] == "X"
+    assert names[1] == "B"
+
+
+def test_id_based_reorder_targets_correct_activity():
+    original = result()
+    materialize_activity_ids(original, trip_namespace="trip-test")
+    id_of_b = original["itinerary"][0]["activities"][1]["id"]
+    edited = apply_itinerary_operations(
+        original,
+        [{"type": "reorder_activity", "day": 1, "activity_id": id_of_b, "to_index": 0}],
+    )
+    names = [a["name"] for a in edited["itinerary"][0]["activities"]]
+    assert names == ["B", "A"]
+
+
+def test_revision_raises_when_activity_id_not_found():
+    original = result()
+    with pytest.raises(InvalidRevisionError, match="not found"):
+        apply_itinerary_operations(
+            original,
+            [{"type": "remove_activity", "day": 1, "activity_id": "nonexistent-id"}],
+        )
+    assert len(original["itinerary"][0]["activities"]) == 2
+
+
 @pytest.fixture
 def trip_client():
     session = AsyncMock()
@@ -593,8 +646,66 @@ def test_revision_conflict_returns_current_version(trip_client):
         )
 
     assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "version_conflict"
     assert response.json()["detail"]["current_version"] == 4
     session.rollback.assert_awaited_once()
+
+
+def test_revision_with_mutation_id_is_idempotent(trip_client):
+    """Same mutation_id submitted twice returns the cached revision (201 both times)."""
+    client, session, user = trip_client
+    row = itinerary_row(user)
+    row.version = 3
+    mut_id = uuid.uuid4()
+    revision = ItineraryRevision(
+        id=uuid.uuid4(),
+        itinerary_id=row.id,
+        actor_user_id=user.id,
+        from_version=2,
+        to_version=3,
+        mutation_id=mut_id,
+        operations=[{"type": "remove_activity", "day": 1, "activity_index": 0}],
+        result=result(),
+        created_at=datetime.now(timezone.utc),
+    )
+    with patch(
+        "backend.routers.trips.revise_itinerary",
+        new_callable=AsyncMock,
+        return_value=(row, revision),
+    ):
+        r1 = client.post(
+            "/api/v1/itineraries/trip-1/revisions",
+            json={
+                "expected_version": 2,
+                "mutation_id": str(mut_id),
+                "operations": [{"type": "remove_activity", "day": 1, "activity_index": 0}],
+            },
+        )
+        r2 = client.post(
+            "/api/v1/itineraries/trip-1/revisions",
+            json={
+                "expected_version": 2,
+                "mutation_id": str(mut_id),
+                "operations": [{"type": "remove_activity", "day": 1, "activity_index": 0}],
+            },
+        )
+
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    assert r1.json()["to_version"] == r2.json()["to_version"] == 3
+
+
+def test_revision_schema_requires_target_for_remove(trip_client):
+    """remove_activity without activity_id or activity_index is rejected at schema level."""
+    client, session, _ = trip_client
+    response = client.post(
+        "/api/v1/itineraries/trip-1/revisions",
+        json={
+            "expected_version": 1,
+            "operations": [{"type": "remove_activity", "day": 1}],
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_revision_response_contains_new_version(trip_client):

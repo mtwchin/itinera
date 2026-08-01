@@ -276,6 +276,9 @@ class ItineraryRevision(Base):
     )
     from_version: Mapped[int] = mapped_column(Integer)
     to_version: Mapped[int] = mapped_column(Integer)
+    mutation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, unique=True
+    )
     operations: Mapped[list] = mapped_column(JSONB, nullable=False)
     result: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

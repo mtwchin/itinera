@@ -277,6 +277,7 @@ actor APIClient {
     func reviseTrip(
         _ jobID: String,
         expectedVersion: Int,
+        mutationId: String,
         operations: [TripRevisionOperation]
     ) async throws -> ItineraryRevisionResponse {
         try await send(
@@ -285,6 +286,7 @@ actor APIClient {
             body: encoder.encode(
                 ItineraryRevisionCreate(
                     expectedVersion: expectedVersion,
+                    mutationId: mutationId,
                     operations: operations
                 )
             ),

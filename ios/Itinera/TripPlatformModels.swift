@@ -2,13 +2,13 @@ import Foundation
 
 enum TripRevisionOperation: Encodable, Sendable {
     case addActivity(day: Int, position: Int?, activity: Activity)
-    case removeActivity(day: Int, activityIndex: Int)
-    case reorderActivity(day: Int, fromIndex: Int, toIndex: Int)
-    case replaceActivity(day: Int, activityIndex: Int, activity: Activity)
+    case removeActivity(day: Int, activityId: String?, activityIndex: Int)
+    case reorderActivity(day: Int, activityId: String?, fromIndex: Int, toIndex: Int)
+    case replaceActivity(day: Int, activityId: String?, activityIndex: Int, activity: Activity)
     case regenerateDay(day: Int, theme: String, activities: [Activity])
 
     private enum CodingKeys: String, CodingKey {
-        case type, day, position, activity, activityIndex, fromIndex, toIndex
+        case type, day, position, activity, activityId, activityIndex, fromIndex, toIndex
         case theme, activities
     }
 
@@ -20,18 +20,21 @@ enum TripRevisionOperation: Encodable, Sendable {
             try container.encode(day, forKey: .day)
             try container.encodeIfPresent(position, forKey: .position)
             try container.encode(activity, forKey: .activity)
-        case .removeActivity(let day, let activityIndex):
+        case .removeActivity(let day, let activityId, let activityIndex):
             try container.encode("remove_activity", forKey: .type)
             try container.encode(day, forKey: .day)
+            try container.encodeIfPresent(activityId, forKey: .activityId)
             try container.encode(activityIndex, forKey: .activityIndex)
-        case .reorderActivity(let day, let fromIndex, let toIndex):
+        case .reorderActivity(let day, let activityId, let fromIndex, let toIndex):
             try container.encode("reorder_activity", forKey: .type)
             try container.encode(day, forKey: .day)
+            try container.encodeIfPresent(activityId, forKey: .activityId)
             try container.encode(fromIndex, forKey: .fromIndex)
             try container.encode(toIndex, forKey: .toIndex)
-        case .replaceActivity(let day, let activityIndex, let activity):
+        case .replaceActivity(let day, let activityId, let activityIndex, let activity):
             try container.encode("replace_activity", forKey: .type)
             try container.encode(day, forKey: .day)
+            try container.encodeIfPresent(activityId, forKey: .activityId)
             try container.encode(activityIndex, forKey: .activityIndex)
             try container.encode(activity, forKey: .activity)
         case .regenerateDay(let day, let theme, let activities):
@@ -45,6 +48,7 @@ enum TripRevisionOperation: Encodable, Sendable {
 
 struct ItineraryRevisionCreate: Encodable, Sendable {
     let expectedVersion: Int
+    let mutationId: String?
     let operations: [TripRevisionOperation]
 }
 

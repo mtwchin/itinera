@@ -35,6 +35,11 @@ class TripMutationResponse(BaseModel):
     version: int = Field(ge=1)
 
 
+_ActivityID = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)
+]
+
+
 class AddActivityOperation(BaseModel):
     type: Literal["add_activity"]
     day: int = Field(ge=1, le=30)
@@ -45,21 +50,42 @@ class AddActivityOperation(BaseModel):
 class RemoveActivityOperation(BaseModel):
     type: Literal["remove_activity"]
     day: int = Field(ge=1, le=30)
-    activity_index: int = Field(ge=0, le=99)
+    activity_id: _ActivityID | None = None
+    activity_index: int | None = Field(default=None, ge=0, le=99)
+
+    @model_validator(mode="after")
+    def _require_target(self) -> "RemoveActivityOperation":
+        if self.activity_id is None and self.activity_index is None:
+            raise ValueError("provide activity_id or activity_index")
+        return self
 
 
 class ReorderActivityOperation(BaseModel):
     type: Literal["reorder_activity"]
     day: int = Field(ge=1, le=30)
-    from_index: int = Field(ge=0, le=99)
+    activity_id: _ActivityID | None = None
+    from_index: int | None = Field(default=None, ge=0, le=99)
     to_index: int = Field(ge=0, le=99)
+
+    @model_validator(mode="after")
+    def _require_source(self) -> "ReorderActivityOperation":
+        if self.activity_id is None and self.from_index is None:
+            raise ValueError("provide activity_id or from_index")
+        return self
 
 
 class ReplaceActivityOperation(BaseModel):
     type: Literal["replace_activity"]
     day: int = Field(ge=1, le=30)
-    activity_index: int = Field(ge=0, le=99)
+    activity_id: _ActivityID | None = None
+    activity_index: int | None = Field(default=None, ge=0, le=99)
     activity: Activity
+
+    @model_validator(mode="after")
+    def _require_target(self) -> "ReplaceActivityOperation":
+        if self.activity_id is None and self.activity_index is None:
+            raise ValueError("provide activity_id or activity_index")
+        return self
 
 
 class RegenerateDayOperation(BaseModel):
@@ -81,6 +107,7 @@ RevisionOperation = Annotated[
 
 class ItineraryRevisionCreate(BaseModel):
     expected_version: int = Field(ge=1)
+    mutation_id: uuid.UUID | None = None
     operations: list[RevisionOperation] = Field(min_length=1, max_length=25)
 
 

@@ -176,6 +176,7 @@ async def create_revision(
             job_id=job_id,
             user_id=user.id,
             expected_version=payload.expected_version,
+            mutation_id=payload.mutation_id,
             operations=[
                 operation.model_dump(mode="json") for operation in payload.operations
             ],
@@ -185,6 +186,7 @@ async def create_revision(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
+                "code": "version_conflict",
                 "message": str(exc),
                 "current_version": exc.current_version,
             },
@@ -299,6 +301,7 @@ async def ai_edit_trip(
             job_id=job_id,
             user_id=user.id,
             expected_version=payload.expected_version,
+            mutation_id=None,
             operations=operations,
         )
     except ItineraryVersionConflictError as exc:
@@ -307,7 +310,11 @@ async def ai_edit_trip(
         await session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"message": str(exc), "current_version": exc.current_version},
+            detail={
+                "code": "version_conflict",
+                "message": str(exc),
+                "current_version": exc.current_version,
+            },
         ) from exc
     except InvalidRevisionError as exc:
         await session.rollback()

@@ -19,6 +19,7 @@ struct TripEditorView: View {
     @State private var editorTarget: ActivityEditorTarget?
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var showConflictSheet = false
     @State private var weatherAdvisory: WeatherAdvisory?
     @State private var isCheckingWeather = false
 
@@ -124,6 +125,38 @@ struct TripEditorView: View {
                     Task { await saveActivity(activity, target: target) }
                 }
             }
+            .environment(\.itineraTheme, theme)
+        }
+        .sheet(isPresented: $showConflictSheet) {
+            NavigationStack {
+                VStack(spacing: 24) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 44))
+                        .foregroundStyle(theme.route)
+                    Text("Trip Updated Elsewhere")
+                        .font(.headline)
+                    Text("This trip was edited on another device. Reload to see the latest version.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(32)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Discard my changes") {
+                            showConflictSheet = false
+                        }
+                        .foregroundStyle(.red)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Reload") {
+                            showConflictSheet = false
+                            Task { await reloadFromServer() }
+                        }
+                        .bold()
+                    }
+                }
+            }
+            .presentationDetents([.medium])
             .environment(\.itineraTheme, theme)
         }
     }
@@ -415,10 +448,12 @@ struct TripEditorView: View {
         guard !operations.isEmpty else { return }
         isWorking = true
         defer { isWorking = false }
+        let mutationId = UUID().uuidString
         do {
             let response = try await appState.reviseTrip(
                 jobID: jobID,
                 expectedVersion: version,
+                mutationId: mutationId,
                 operations: operations
             )
             undoStack.append((previousDay.day, previousDay))
@@ -427,22 +462,34 @@ struct TripEditorView: View {
             history.append(response)
             errorMessage = nil
             onApply(response.result, response.toVersion)
+        } catch let error as APIError {
+            if case .http(let statusCode, let code, _, _) = error,
+               statusCode == 409,
+               code == "version_conflict" {
+                showConflictSheet = true
+            } else {
+                errorMessage = error.localizedDescription
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func remove(day: ItineraryDay, index: Int) async {
+        let activityId = day.activities.indices.contains(index)
+            ? day.activities[index].activityId
+            : nil
         await apply(
-            [.removeActivity(day: day.day, activityIndex: index)],
+            [.removeActivity(day: day.day, activityId: activityId, activityIndex: index)],
             previousDay: day
         )
     }
 
     private func move(day: ItineraryDay, from: Int, to: Int) async {
         guard day.activities.indices.contains(from), day.activities.indices.contains(to) else { return }
+        let activityId = day.activities[from].activityId
         await apply(
-            [.reorderActivity(day: day.day, fromIndex: from, toIndex: to)],
+            [.reorderActivity(day: day.day, activityId: activityId, fromIndex: from, toIndex: to)],
             previousDay: day
         )
     }
@@ -506,8 +553,11 @@ struct TripEditorView: View {
                 previousDay: day
             )
         case .replace(_, let index, _):
+            let activityId = day.activities.indices.contains(index)
+                ? day.activities[index].activityId
+                : nil
             await apply(
-                [.replaceActivity(day: day.day, activityIndex: index, activity: activity)],
+                [.replaceActivity(day: day.day, activityId: activityId, activityIndex: index, activity: activity)],
                 previousDay: day
             )
         }
@@ -523,6 +573,7 @@ struct TripEditorView: View {
             let response = try await appState.reviseTrip(
                 jobID: jobID,
                 expectedVersion: version,
+                mutationId: UUID().uuidString,
                 operations: [
                     .regenerateDay(
                         day: previous.day,
@@ -537,6 +588,30 @@ struct TripEditorView: View {
             errorMessage = nil
             onApply(response.result, response.toVersion)
             if current == previous.snapshot { undoStack.removeAll() }
+        } catch let error as APIError {
+            if case .http(let statusCode, let code, _, _) = error,
+               statusCode == 409,
+               code == "version_conflict" {
+                showConflictSheet = true
+            } else {
+                errorMessage = error.localizedDescription
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reloadFromServer() async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let status = try await appState.apiClient.jobStatus(jobID)
+            if let freshItinerary = status.result {
+                itinerary = freshItinerary
+                version = status.version
+                undoStack.removeAll()
+                onApply(freshItinerary, status.version)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

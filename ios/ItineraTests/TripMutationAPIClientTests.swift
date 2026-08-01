@@ -351,8 +351,9 @@ final class TripMutationAPIClientTests: XCTestCase {
         let response = try await appState.reviseTrip(
             jobID: original.jobId,
             expectedVersion: 1,
+            mutationId: UUID().uuidString,
             operations: [
-                .reorderActivity(day: 1, fromIndex: 0, toIndex: 1)
+                .reorderActivity(day: 1, activityId: nil, fromIndex: 0, toIndex: 1)
             ]
         )
 

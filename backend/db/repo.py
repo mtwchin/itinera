@@ -383,6 +383,23 @@ def _day_for_number(result: dict, day_number: int) -> dict:
     return day
 
 
+def _resolve_activity_index(
+    activities: list, op: dict, *, index_key: str = "activity_index"
+) -> int:
+    activity_id = op.get("activity_id")
+    if activity_id:
+        for i, a in enumerate(activities):
+            if a.get("id") == activity_id:
+                return i
+        raise InvalidRevisionError(
+            f"Activity {activity_id!r} not found in day {op['day']}"
+        )
+    idx = op.get(index_key)
+    if idx is None or idx >= len(activities):
+        raise InvalidRevisionError("Activity index is out of range")
+    return idx
+
+
 def apply_itinerary_operations(result: dict, operations: list[dict]) -> dict:
     """Apply a validated edit batch atomically to a detached itinerary copy."""
 
@@ -399,20 +416,18 @@ def apply_itinerary_operations(result: dict, operations: list[dict]) -> dict:
                 raise InvalidRevisionError("Activity insertion position is out of range")
             activities.insert(position, copy.deepcopy(operation["activity"]))
         elif operation_type == "remove_activity":
-            index = operation["activity_index"]
-            if index >= len(activities):
-                raise InvalidRevisionError("Activity index is out of range")
+            index = _resolve_activity_index(activities, operation)
             activities.pop(index)
         elif operation_type == "reorder_activity":
-            source_index = operation["from_index"]
+            source_index = _resolve_activity_index(
+                activities, operation, index_key="from_index"
+            )
             destination_index = operation["to_index"]
-            if source_index >= len(activities) or destination_index >= len(activities):
+            if destination_index >= len(activities):
                 raise InvalidRevisionError("Activity index is out of range")
             activities.insert(destination_index, activities.pop(source_index))
         elif operation_type == "replace_activity":
-            index = operation["activity_index"]
-            if index >= len(activities):
-                raise InvalidRevisionError("Activity index is out of range")
+            index = _resolve_activity_index(activities, operation)
             activities[index] = copy.deepcopy(operation["activity"])
         elif operation_type == "regenerate_day":
             day["theme"] = operation["theme"]
@@ -428,6 +443,7 @@ async def revise_itinerary(
     job_id: str,
     user_id: uuid.UUID,
     expected_version: int,
+    mutation_id: uuid.UUID | None,
     operations: list[dict],
 ) -> tuple[Itinerary, ItineraryRevision] | None:
     row = await get_itinerary_with_access(
@@ -439,6 +455,17 @@ async def revise_itinerary(
     )
     if row is None:
         return None
+    if mutation_id is not None:
+        existing = await session.scalar(
+            select(ItineraryRevision).where(
+                and_(
+                    ItineraryRevision.mutation_id == mutation_id,
+                    ItineraryRevision.itinerary_id == row.id,
+                )
+            )
+        )
+        if existing is not None:
+            return row, existing
     current_version = row.version or 1
     if current_version != expected_version:
         raise ItineraryVersionConflictError(current_version)
@@ -453,6 +480,7 @@ async def revise_itinerary(
         actor_user_id=user_id,
         from_version=current_version,
         to_version=current_version + 1,
+        mutation_id=mutation_id,
         operations=copy.deepcopy(operations),
         result=copy.deepcopy(updated_result),
     )
