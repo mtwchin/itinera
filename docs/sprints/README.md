@@ -44,6 +44,8 @@ intentional commit, a pushed branch, and an integration handoff.
 | Principal-scoped core state bootstrap | Program lead | P38 | Locally validated; authenticated startup namespaces core private stores and purges unproven legacy core data; P39 scopes drafts and locks |
 | Principal-scoped drafts and locked stops | Program lead | P39 | Locally validated; drafts and locks activate the authenticated namespace before reading or writing; P40 closes cold-start presentation leakage |
 | Principal-scoped presentation state | Program lead | P40 | Locally validated; widget snapshots use an opaque active-principal selection and cold activation clears Live Activities and Itinera notifications |
+| Stable stop-ID mutation targets, client mutation IDs, conflict UX | Program lead | P41 | Locally validated; remove/reorder/replace accept stable `activity_id`; client-generated `mutation_id` deduplicates retries; 409 conflict sheet with reload/discard; see [stable-stop-mutations.md](stable-stop-mutations.md) |
+| APNs generation completion with direct trip deep links | Program lead | P42 | Locally validated; device-token registration endpoint, `device_tokens` table, httpx/h2 APNs client, ES256 JWT signing, post-generation dispatch, iOS entitlement + delegate wiring; see [apns-generation-completion.md](apns-generation-completion.md) |
 | Privacy release artifacts | Program lead | Audit | Privacy manifest validates and is bundled; public policy/support/legal artifacts await approved destinations; see [privacy-release-artifacts.md](privacy-release-artifacts.md) |
 
 The implementation tasks run in isolated Codex worktrees created from the same

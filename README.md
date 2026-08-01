@@ -47,7 +47,7 @@ Reservations, preparation checklists, expense tracking, private collaborator inv
 
 **Notifications and extensions**
 
-Local trip-ready and leave-by notifications, a Lock Screen and Dynamic Island Live Activity, and a WidgetKit home screen extension.
+Remote push notifications (APNs) deliver trip-ready alerts with a direct deep link as soon as the generation worker commits a successful result. Local leave-by reminders fire 15 minutes before each activity. A Lock Screen and Dynamic Island Live Activity tracks active generation, and a WidgetKit home screen extension shows the next upcoming stop.
 
 **Account and settings**
 
@@ -117,7 +117,7 @@ The default visual theme is **Atlas Field Notes**. All presentation is isolated 
 
 **Google Maps export** uses the `comgooglemaps://` URL scheme to open the native app directly with the day's route pre-loaded. If Google Maps is not installed, the export falls back to the universal HTTPS Maps URL. No Google API key is required. Days with more than five stops are split into ordered, overlapping route segments so no stop is dropped.
 
-Some capabilities require Apple Developer configuration before they function on a physical device: Sign in with Apple, WeatherKit, and the Widget and Live Activity extension must be enabled in the app identifiers and provisioning profiles, including the `group.com.itinera.shared` App Group on both targets.
+Some capabilities require Apple Developer configuration before they function on a physical device: Sign in with Apple, WeatherKit, push notifications (`aps-environment`), and the Widget and Live Activity extension must be enabled in the app identifiers and provisioning profiles, including the `group.com.itinera.shared` App Group on both targets.
 
 ---
 
@@ -156,6 +156,7 @@ Synthetic results carry `source=synthetic` and are deterministic development fix
 - `TRENDS_FEED_URL` and `TRENDS_FEED_API_KEY`.
 - `APPLE_MAPS_TEAM_ID`, `APPLE_MAPS_KEY_ID`, `APPLE_MAPS_PRIVATE_KEY`.
 - `APPLE_SIGN_IN_CLIENT_ID` when Sign in with Apple account recovery is enabled.
+- `APNS_KEY_ID`, `APNS_KEY_P8`, `APNS_TEAM_ID` for remote push notifications. Set `APNS_ENV=production` in production; omit to skip push dispatch (local notifications still function).
 
 The normalized trends endpoint accepts a bearer-authenticated POST body of `{"city": ..., "country": ..., "limit": ...}` and returns a `places` array. Each place supplies at minimum `name`, with optional `type`, `description`, `source`, `source_url`, `views`, and `engagement`.
 
