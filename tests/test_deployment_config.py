@@ -1,4 +1,7 @@
 import re
+import subprocess
+import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -12,6 +15,25 @@ def _render_service(blueprint: str, name: str) -> str:
 
 def _render_env_keys(service: str) -> set[str]:
     return set(re.findall(r"^      - key: ([A-Z0-9_]+)$", service, re.MULTILINE))
+
+
+def test_migration_upgrade_sql_does_not_create_duplicate_index_names():
+    completed = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    index_names = re.findall(
+        r"^CREATE (?:UNIQUE )?INDEX ([^\s]+)",
+        completed.stdout,
+        re.MULTILINE,
+    )
+    duplicate_names = sorted(
+        name for name, count in Counter(index_names).items() if count > 1
+    )
+
+    assert duplicate_names == []
 
 
 def test_api_traffic_health_checks_use_readiness():
@@ -68,8 +90,8 @@ def test_render_environment_is_scoped_by_process_role():
 
     edit_provider_keys = {
         "ITINERARY_COMPOSER_PROVIDER",
-        "OPENAI_API_KEY",
-        "OPENAI_MODEL",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_MODEL",
         "OPENAI_REQUEST_TIMEOUT_SECONDS",
     }
     assert edit_provider_keys <= api_keys & worker_keys

@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # OpenAI is the production default. Ollama remains an explicit keyless
     # local-development option via ITINERARY_COMPOSER_PROVIDER=ollama.
-    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq"] = "openai"
+    itinerary_composer_provider: Literal["ollama", "anthropic", "openai", "gemini", "groq", "deepseek"] = "openai"
     ollama_base_url: str = "http://localhost:11434/api"
     ollama_model: str = "qwen2.5:7b-instruct"
     ollama_api_key: str | None = None
@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    deepseek_api_key: str | None = None
+    deepseek_model: str = "deepseek-chat"
 
     generation_admission_enabled: bool = True
     generation_disabled_retry_after_seconds: int = Field(default=60, ge=1, le=3600)

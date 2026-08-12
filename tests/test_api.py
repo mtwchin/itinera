@@ -535,3 +535,11 @@ def test_unversioned_itinerary_route_is_not_exposed(authenticated_client):
 def test_healthz():
     with TestClient(app) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_device_token_registration_contract_returns_no_content():
+    operation = app.openapi()["paths"]["/api/v1/notifications/device-token"]["post"]
+
+    assert "204" in operation["responses"]
+    assert "200" not in operation["responses"]
+    assert "content" not in operation["responses"]["204"]

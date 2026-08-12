@@ -17,7 +17,11 @@ class DeviceTokenRegister(BaseModel):
     platform: str = Field(default="apns", pattern=r"^apns$")
 
 
-@router.post("/device-token")
+@router.post(
+    "/device-token",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def register_device_token(
     payload: DeviceTokenRegister,
     user: User = Depends(current_user),

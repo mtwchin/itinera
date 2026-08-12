@@ -22,6 +22,8 @@ def _settings(**overrides):
         "gemini_model": "gemini-test",
         "groq_api_key": "groq-key",
         "groq_model": "groq-test",
+        "deepseek_api_key": "deepseek-key",
+        "deepseek_model": "deepseek-test",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -42,6 +44,29 @@ def test_editor_uses_only_the_explicitly_selected_provider():
         max_output_tokens=800,
     )
     anthropic.assert_not_called()
+
+
+def test_editor_selects_deepseek_when_configured():
+    generate = MagicMock()
+    with patch.object(editor, "_deepseek_generate_fn", return_value=generate) as deepseek:
+        actual = editor.generate_fn_for_settings(
+            _settings(itinerary_composer_provider="deepseek")
+        )
+
+    assert actual is generate
+    deepseek.assert_called_once_with(
+        "deepseek-key",
+        "deepseek-test",
+        timeout_seconds=45,
+        max_output_tokens=800,
+    )
+
+
+def test_editor_requires_deepseek_credential_when_selected():
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+        editor.generate_fn_for_settings(
+            _settings(itinerary_composer_provider="deepseek", deepseek_api_key=None)
+        )
 
 
 def test_editor_never_falls_back_to_a_different_provider_credential():

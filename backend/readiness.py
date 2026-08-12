@@ -280,6 +280,7 @@ def validate_api_configuration(settings: object) -> ConfigurationReadiness:
             "gemini": ("gemini_api_key", "gemini_model"),
             "openai": ("openai_api_key", "openai_model"),
             "groq": ("groq_api_key", "groq_model"),
+            "deepseek": ("deepseek_api_key", "deepseek_model"),
         }
         required = provider_fields.get(provider)
         if required is None or not all(_is_nonblank(value(field)) for field in required):

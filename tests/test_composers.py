@@ -13,6 +13,7 @@ from openai import OpenAIError
 from backend.agents.composers import (
     AnthropicComposer,
     ComposerError,
+    DeepSeekComposer,
     GroqComposer,
     OllamaComposer,
     OpenAIComposer,
@@ -353,6 +354,63 @@ def test_openai_selection_requires_key_and_nonblank_model():
         validate_composer_configuration(
             _settings(itinerary_composer_provider="openai", openai_api_key=None)
         )
+
+
+def test_deepseek_disables_implicit_sdk_retries():
+    with patch("backend.agents.composers.OpenAI") as sdk:
+        DeepSeekComposer("test-key", "deepseek-chat", timeout_seconds=45)
+
+    sdk.assert_called_once_with(
+        api_key="test-key",
+        base_url="https://api.deepseek.com/v1",
+        timeout=45,
+        max_retries=0,
+    )
+
+
+def test_deepseek_selection_requires_key_and_nonblank_model():
+    with pytest.raises(RuntimeError, match="requires DEEPSEEK_API_KEY"):
+        validate_composer_configuration(
+            _settings(itinerary_composer_provider="deepseek", deepseek_api_key=None)
+        )
+    with pytest.raises(RuntimeError, match="DEEPSEEK_MODEL must not be empty"):
+        validate_composer_configuration(
+            _settings(
+                itinerary_composer_provider="deepseek",
+                deepseek_api_key="deepseek-secret",
+                deepseek_model="   ",
+            )
+        )
+
+
+def test_deepseek_selection_builds_deepseek_composer():
+    with patch("backend.agents.composers.OpenAI"):
+        composer = create_itinerary_composer(
+            _settings(
+                itinerary_composer_provider="deepseek",
+                deepseek_api_key="deepseek-secret",
+            )
+        )
+
+    assert isinstance(composer, DeepSeekComposer)
+    assert composer.model == "deepseek-chat"
+
+
+def test_deepseek_failures_raise_sanitized_provider_neutral_error():
+    client = MagicMock()
+    client.chat.completions.create.side_effect = OpenAIError(
+        "sensitive provider detail"
+    )
+
+    with patch("backend.agents.composers.OpenAI", return_value=client):
+        composer = DeepSeekComposer("deepseek-test-key", "deepseek-chat")
+
+    with pytest.raises(ComposerError) as exc_info:
+        composer.compose(REQUEST, PLACES)
+
+    message = str(exc_info.value)
+    assert "DeepSeek model 'deepseek-chat' did not return a valid itinerary" == message
+    assert "sensitive provider detail" not in message
 
 
 def test_groq_disables_implicit_sdk_retries():

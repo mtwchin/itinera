@@ -65,6 +65,9 @@ jobs:
       - name: Lint backend and automation
         run: python -m ruff check backend tests scripts
 
+      - name: Verify documentation integrity
+        run: python scripts/check_docs.py
+
       - name: Run backend tests
         run: python -m pytest
 

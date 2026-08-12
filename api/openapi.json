@@ -269,6 +269,23 @@
             ],
             "title": "Source"
           },
+          "source_platforms": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Platforms"
+          },
           "time": {
             "title": "Time",
             "type": "string"
@@ -800,6 +817,27 @@
         "title": "DeleteMyDataRequest",
         "type": "object"
       },
+      "DeviceTokenRegister": {
+        "properties": {
+          "platform": {
+            "default": "apns",
+            "pattern": "^apns$",
+            "title": "Platform",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 200,
+            "minLength": 32,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "DeviceTokenRegister",
+        "type": "object"
+      },
       "ExpenseCreate": {
         "properties": {
           "amount_minor": {
@@ -1288,6 +1326,18 @@
             "minimum": 1.0,
             "title": "Expected Version",
             "type": "integer"
+          },
+          "mutation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mutation Id"
           },
           "operations": {
             "items": {
@@ -1865,11 +1915,31 @@
       },
       "RemoveActivityOperation": {
         "properties": {
+          "activity_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Id"
+          },
           "activity_index": {
-            "maximum": 99.0,
-            "minimum": 0.0,
-            "title": "Activity Index",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 99.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Index"
           },
           "day": {
             "maximum": 30.0,
@@ -1885,14 +1955,26 @@
         },
         "required": [
           "type",
-          "day",
-          "activity_index"
+          "day"
         ],
         "title": "RemoveActivityOperation",
         "type": "object"
       },
       "ReorderActivityOperation": {
         "properties": {
+          "activity_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Id"
+          },
           "day": {
             "maximum": 30.0,
             "minimum": 1.0,
@@ -1900,10 +1982,17 @@
             "type": "integer"
           },
           "from_index": {
-            "maximum": 99.0,
-            "minimum": 0.0,
-            "title": "From Index",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 99.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Index"
           },
           "to_index": {
             "maximum": 99.0,
@@ -1920,7 +2009,6 @@
         "required": [
           "type",
           "day",
-          "from_index",
           "to_index"
         ],
         "title": "ReorderActivityOperation",
@@ -1931,11 +2019,31 @@
           "activity": {
             "$ref": "#/components/schemas/Activity"
           },
+          "activity_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Id"
+          },
           "activity_index": {
-            "maximum": 99.0,
-            "minimum": 0.0,
-            "title": "Activity Index",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 99.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Index"
           },
           "day": {
             "maximum": 30.0,
@@ -1952,7 +2060,6 @@
         "required": [
           "type",
           "day",
-          "activity_index",
           "activity"
         ],
         "title": "ReplaceActivityOperation",
@@ -4263,6 +4370,46 @@
         "summary": "Stream Itinerary",
         "tags": [
           "itineraries"
+        ]
+      }
+    },
+    "/api/v1/notifications/device-token": {
+      "post": {
+        "description": "Register or refresh a push notification token for the authenticated user.",
+        "operationId": "register_device_token_api_v1_notifications_device_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTokenRegister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register Device Token",
+        "tags": [
+          "notifications"
         ]
       }
     },

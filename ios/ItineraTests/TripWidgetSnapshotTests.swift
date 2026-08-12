@@ -3,6 +3,20 @@ import XCTest
 @testable import Itinera
 
 final class TripWidgetSnapshotTests: XCTestCase {
+    func testScopedKeyAcceptsOnlyOpaquePrincipalDigests() throws {
+        let digest = String(repeating: "a", count: 64)
+
+        XCTAssertEqual(
+            TripWidgetSnapshotStore.scopedKey(principalDigest: digest),
+            "trip-widget-snapshot-v1.\(digest)"
+        )
+        XCTAssertNil(
+            TripWidgetSnapshotStore.scopedKey(
+                principalDigest: "11111111-2222-3333-4444-555555555555"
+            )
+        )
+    }
+
     func testSnapshotRoundTripsThroughAnIsolatedDefaultsSuite() throws {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -90,8 +104,16 @@ final class TripWidgetSnapshotTests: XCTestCase {
             leaveBy: nil,
             progress: 0.5
         )
-        let firstKey = "trip-widget-snapshot-v1.opaque-first"
-        let secondKey = "trip-widget-snapshot-v1.opaque-second"
+        let firstKey = try XCTUnwrap(
+            TripWidgetSnapshotStore.scopedKey(
+                principalDigest: String(repeating: "a", count: 64)
+            )
+        )
+        let secondKey = try XCTUnwrap(
+            TripWidgetSnapshotStore.scopedKey(
+                principalDigest: String(repeating: "b", count: 64)
+            )
+        )
 
         XCTAssertTrue(TripWidgetSnapshotStore.save(first, key: firstKey, defaults: defaults))
         XCTAssertTrue(TripWidgetSnapshotStore.save(second, key: secondKey, defaults: defaults))

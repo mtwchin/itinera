@@ -28,7 +28,6 @@ def upgrade() -> None:
             postgresql.UUID(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
-            index=True,
         ),
         sa.Column("token", sa.String(200), nullable=False),
         sa.Column("platform", sa.String(16), nullable=False, server_default="apns"),

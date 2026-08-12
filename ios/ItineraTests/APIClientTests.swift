@@ -805,6 +805,23 @@ final class APIClientTests: XCTestCase {
         XCTAssertNil(try decoder.consume(line: ""))
     }
 
+    func testSSEDecoderFlushesTerminalFrameAtEndOfStream() throws {
+        var decoder = ItinerarySSEEventDecoder()
+
+        XCTAssertNil(try decoder.consume(line: "event: result"))
+        XCTAssertNil(
+            try decoder.consume(
+                line: "data: {\"job_id\":\"job-123\",\"status\":\"failed\",\"error_code\":\"generation_unavailable\",\"error\":\"Try again later.\"}"
+            )
+        )
+
+        let terminal = try decoder.finish()
+
+        XCTAssertEqual(terminal?.jobId, "job-123")
+        XCTAssertEqual(terminal?.status, .failed)
+        XCTAssertNil(try decoder.finish())
+    }
+
     func testAwaitItineraryConsumesAuthenticatedTerminalStream() async throws {
         let credentialStore = MemoryCredentialStore(
             installationID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",

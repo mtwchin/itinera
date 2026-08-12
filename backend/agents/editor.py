@@ -198,6 +198,36 @@ def _groq_generate_fn(
     return _annotate(generate, provider="groq", model=model)
 
 
+def _deepseek_generate_fn(
+    api_key: str, model: str, *, timeout_seconds: int, max_output_tokens: int
+) -> GenerateFn:
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1",
+        timeout=timeout_seconds,
+        max_retries=0,
+    )
+
+    def generate(system: str, user: str) -> str:
+        generate.reported_usage = None
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_completion_tokens=max_output_tokens,
+        )
+        generate.reported_usage = _usage(response, "prompt_tokens", "completion_tokens")
+        return response.choices[0].message.content or ""
+
+    return _annotate(generate, provider="deepseek", model=model)
+
+
 def generate_fn_for_settings(settings) -> GenerateFn:
     """Return a bounded editor for the explicitly selected composer provider."""
 
@@ -236,6 +266,15 @@ def generate_fn_for_settings(settings) -> GenerateFn:
         return _groq_generate_fn(
             settings.groq_api_key,
             settings.groq_model,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+        )
+    if provider == "deepseek":
+        if not settings.deepseek_api_key:
+            raise RuntimeError("AI editing requires DEEPSEEK_API_KEY")
+        return _deepseek_generate_fn(
+            settings.deepseek_api_key,
+            settings.deepseek_model,
             timeout_seconds=timeout_seconds,
             max_output_tokens=max_output_tokens,
         )

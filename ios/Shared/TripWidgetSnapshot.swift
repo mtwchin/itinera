@@ -51,11 +51,18 @@ enum TripWidgetSnapshotStore {
     private static let snapshotKey = "trip-widget-snapshot-v1"
     private static let activeSnapshotKey = "trip-widget-active-snapshot-key-v1"
 
+    static func scopedKey(principalDigest: String) -> String? {
+        guard principalDigest.count == 64,
+              principalDigest.allSatisfy({ $0.isASCII && $0.isHexDigit })
+        else { return nil }
+        return "\(snapshotKey).\(principalDigest.lowercased())"
+    }
+
     static func load(defaults: UserDefaults? = nil) -> TripWidgetSnapshot? {
         guard
             let defaults = defaults ?? UserDefaults(suiteName: appGroupIdentifier),
             let selectedKey = defaults.string(forKey: activeSnapshotKey),
-            selectedKey.hasPrefix("\(snapshotKey)."),
+            isAllowedSnapshotKey(selectedKey),
             let data = defaults.data(forKey: selectedKey),
             let snapshot = try? JSONDecoder().decode(TripWidgetSnapshot.self, from: data),
             snapshot.schemaVersion == TripWidgetSnapshot.currentSchemaVersion
@@ -63,6 +70,15 @@ enum TripWidgetSnapshotStore {
             return nil
         }
         return snapshot
+    }
+
+    private static func isAllowedSnapshotKey(_ key: String) -> Bool {
+        let prefix = "\(snapshotKey)."
+        guard key.hasPrefix(prefix) else { return false }
+        let suffix = String(key.dropFirst(prefix.count))
+        return suffix == "default"
+            || (suffix.count == 64
+                && suffix.allSatisfy({ $0.isASCII && $0.isHexDigit }))
     }
 
     @discardableResult

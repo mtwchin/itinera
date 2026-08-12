@@ -534,6 +534,56 @@ class GroqComposer:
             ) from exc
 
 
+class DeepSeekComposer:
+    """Compose through DeepSeek's OpenAI-compatible chat completions API."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: int = 180) -> None:
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com/v1",
+            timeout=timeout_seconds,
+            max_retries=0,
+        )
+        self.model = model
+        self.reported_usage: dict[str, int] | None = None
+
+    def compose(self, request: GenerateItineraryRequest, places: list[dict]) -> Itinerary:
+        import json as _json
+
+        self.reported_usage = None
+        schema = _json.dumps(Itinerary.model_json_schema(), indent=2)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert travel curator who creates vivid, "
+                            "opinionated itineraries. Use only the supplied places "
+                            "and return valid JSON that strictly matches this schema:\n\n"
+                            f"{schema}"
+                        ),
+                    },
+                    {"role": "user", "content": _prompt(request, places)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            self.reported_usage = _usage_from_attributes(
+                getattr(response, "usage", None), "prompt_tokens", "completion_tokens"
+            )
+            content = response.choices[0].message.content
+            itinerary = Itinerary.model_validate_json(content)
+            return enrich_from_places(itinerary, request, places)
+        except ComposerError:
+            raise
+        except (OpenAIError, ValidationError, KeyError, TypeError, ValueError) as exc:
+            raise ComposerError(
+                f"DeepSeek model {self.model!r} did not return a valid itinerary"
+            ) from exc
+
+
 class GeminiComposer:
     """Compose through Google Gemini with structured JSON output."""
 
@@ -601,6 +651,15 @@ def validate_composer_configuration(settings) -> None:
             )
         return
 
+    if settings.itinerary_composer_provider == "deepseek":
+        if not settings.deepseek_api_key:
+            raise RuntimeError(
+                "ITINERARY_COMPOSER_PROVIDER=deepseek requires DEEPSEEK_API_KEY"
+            )
+        if not settings.deepseek_model.strip():
+            raise RuntimeError("DEEPSEEK_MODEL must not be empty")
+        return
+
     if settings.itinerary_composer_provider == "openai":
         if not settings.openai_api_key or not settings.openai_api_key.strip():
             raise RuntimeError(
@@ -629,6 +688,8 @@ def create_itinerary_composer(settings) -> ItineraryComposer:
         return GeminiComposer(settings.gemini_api_key, settings.gemini_model)
     if settings.itinerary_composer_provider == "groq":
         return GroqComposer(settings.groq_api_key, settings.groq_model)
+    if settings.itinerary_composer_provider == "deepseek":
+        return DeepSeekComposer(settings.deepseek_api_key, settings.deepseek_model)
     if settings.itinerary_composer_provider == "openai":
         return OpenAIComposer(
             settings.openai_api_key.strip(),

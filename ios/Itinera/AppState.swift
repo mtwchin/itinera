@@ -232,7 +232,10 @@ final class AppState: ObservableObject {
         if !requiresPrincipalScopedStores {
             return "trip-widget-snapshot-v1.default"
         }
-        return activePrincipalScope?.defaultsKey(name: "trip-widget-snapshot-v1")
+        guard let activePrincipalScope else { return nil }
+        return TripWidgetSnapshotStore.scopedKey(
+            principalDigest: activePrincipalScope.digest
+        )
     }
 
     func loadCachedTrips() async {

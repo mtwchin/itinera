@@ -98,11 +98,11 @@ services:
       # selection identical to the generation worker and expose no discovery,
       # maps, or other worker-only credentials here.
       - key: ITINERARY_COMPOSER_PROVIDER
-        value: openai
-      - key: OPENAI_API_KEY
+        value: deepseek
+      - key: DEEPSEEK_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-5.6-luna
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
       - key: OPENAI_REQUEST_TIMEOUT_SECONDS
         value: "90"
 
@@ -150,11 +150,11 @@ services:
       - key: ITINERARY_JOB_LEASE_COMPLETION_MARGIN_SECONDS
         value: "30"
       - key: ITINERARY_COMPOSER_PROVIDER
-        value: openai
-      - key: OPENAI_API_KEY
+        value: deepseek
+      - key: DEEPSEEK_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-5.6-luna
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
       - key: OPENAI_REQUEST_TIMEOUT_SECONDS
         value: "90"
       # Retained for deployments that switch back to a private, authenticated
